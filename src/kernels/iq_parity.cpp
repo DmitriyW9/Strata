@@ -6,6 +6,7 @@
 // matrix-vector product within the activation rounding (a few 1e-3 relative).
 #include "strata/kernels/iq_kernels.hpp"
 #include "strata/kernels/native_mmvq.hpp"
+#include "strata/kernels/dequant_bf16.hpp"
 
 #include <cuda_runtime.h>
 
@@ -41,7 +42,10 @@ int main(int argc, char** argv) {
         cudaMemcpy(dw, raw.data(), raw.size(), cudaMemcpyHostToDevice);
         double dq_err = 0.0;
         if (strata::kernels::iq_supported(type) && ((size_t) rows * cols) % 256 == 0) {
-            strata::kernels::iq_dequant_f32(type, dw, (int64_t) rows * cols, dq, s);
+            if (strata::kernels::is_iq(type))
+                strata::kernels::iq_dequant_f32(type, dw, (int64_t) rows * cols, dq, s);
+            else
+                strata::kernels::dequant_f32(type, dw, 0, rows, cols, dq, s);
             std::vector<float> got(ref.size());
             cudaMemcpy(got.data(), dq, got.size() * 4, cudaMemcpyDeviceToHost);
             double num = 0, den = 0;

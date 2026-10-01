@@ -3,8 +3,9 @@
 
     START-HERE.bat  (Windows)   /   ./setup.sh  (Linux)      - they install Python if needed and run this file
 
-The first time it asks four questions - which model (the original Qwen3.8-Flash-Next or the Swift 1.5 fine-tune),
-which size, how much context, and whether the model should also read images - then installs everything and starts the model on http://127.0.0.1:8080 (OpenAI- and Anthropic-compatible
+The first time it asks four questions - which model (the original Qwen3.8-Flash-Next, the Swift 1.5 fine-tune, or
+the Uncensored Q4_K_M release), which size, how much context, and whether the model should also read images - then
+installs everything and starts the model on http://127.0.0.1:8080 (OpenAI- and Anthropic-compatible
 API; a small page there shows that it runs). Every later start skips straight to running the model: nothing that
 is already downloaded, installed or prepared is done again.
 
@@ -19,7 +20,7 @@ What the first run does (each step is skipped when it is already done):
   6. prepares the model for Strata and fetches the MTP draft layer (~5 GB, from the original Qwen checkpoint)
   7. writes run-<model>.bat / run-<model>.sh and starts the model
 
-Options: --family qwen|swift, --model Q2_0|IQ2_XS|IQ3_XXS|IQ3_S, --context 32768, --vision yes|no|gpu|cpu, --port 8080, --yes (recommended
+Options: --family qwen|swift|coder|uncensored, --model Q2_0|IQ2_XS|IQ3_XXS|IQ3_S|IQ1_M|Q4_K_M, --context 32768, --vision yes|no|gpu|cpu, --port 8080, --yes (recommended
 answers, no questions), --setup (install another model / change settings instead of starting), --no-start,
 --host 0.0.0.0 --api-key KEY (reach it from other devices on your network), --experimental-speed-projection on|off
 (EXPERIMENTAL, off by default),
@@ -62,8 +63,7 @@ MIN_ENGINE = (0, 1, 28)                # v0.1.28: the expert cache reserves the 
 PY_PACKAGES = ["numpy", "jinja2", "regex", "pyyaml", "tqdm", "requests", "cmake", "ninja", "pillow", "psutil"]
 
 MODELS = {
-    # the original model only for now: Swift 1.5's Q2_0 files split one layer's experts across the two shards, which
-    # the pack tool (tools/iq_pack.py) cannot prepare yet (#171)
+    # Q2_0 is enabled for the original release; Swift's Q2_0 expert files are a separate, unvalidated setup target.
     "Q2_0": {"about": "2-bit, the fastest", "download_gb": 66.4, "ram_gb": 48, "arena_gb": 34.0, "families": ("qwen",)},
     "IQ2_XS": {"about": "2-bit i-quant, a little better quality, close in speed", "download_gb": 68.0, "ram_gb": 48,
                "arena_gb": 35.5},
@@ -76,9 +76,21 @@ MODELS = {
     # the Coder release: 256 of the 512 experts kept (the ones code, tools and vision use), IQ2_S-IQ4_XS like IQ3_S
     "IQ1_M": {"about": "the Coder's only size: half the experts, stored like IQ3_S (3.5 bits)", "download_gb": 58.4,
               "ram_gb": 32, "arena_gb": 23.4, "families": ("coder",)},
+    # the Uncensored release in a plain quant, not in GSQ-RCO's i-quants: its experts are Q4_K (gate/up) and Q8_0
+    # (down), and its per-layer token embedding table is Q5_0.  The sizes below are measured on its three shards:
+    # 119.1 GB of files, of which 80.5 GB are experts (75.0 GiB) - what has to be in RAM - and 35.2 GB are the
+    # per-layer token embedding table, which stays
+    # on the SSD (tools/iq_pack.py --compat-bf16 converts the small projections this quant also compresses).
+    "Q4_K_M": {"about": "the Uncensored release's only size: plain Q4_K_M; needs ~92 GB of RAM",
+               "download_gb": 119.1, "ram_gb": 92,
+               "arena_gb": 80.5, "families": ("uncensored",)},
 }
 CONTEXTS = [8192, 32768, 65536, 131072, 262144]
-# The model families: the same architecture, weights in the same three GSQ-RCO sizes, different files.
+# The model families: the same architecture and the same files per size, different weights and different files.
+# A family whose files usually already sit in a folder the user downloaded (a Hugging Face snapshot) lists it in
+# "local": setup uses what is already there and downloads only what is missing (STRATA_MODEL_DIR points elsewhere).
+LOCAL_MODELS = [Path(p) for p in os.environ.get("STRATA_MODEL_DIR", str(Path.home() / "projects/ai/LLM/models"))
+                .split(os.pathsep) if p]
 FAMILIES = {
     "qwen": {"title": "Qwen3.8-Flash-Next", "by": "Qwen; GSQ-RCO quants by ISTA-DASLab",
              "about": "the original model",
@@ -102,6 +114,18 @@ FAMILIES = {
               "mmproj_hf": "https://huggingface.co/ISTA-DASLab/Qwen3.8-Flash-Next-GSQ-RCO-Coder-GGUF/resolve/main/",
               "mmproj": "mmproj-Qwen3.8-Flash-Next-BF16.gguf", "name": "qwen3.8-flash-next-coder",
               "profile": "expert-profile-coder.bin"},
+    # the abliterated ("uncensored") fine-tune, in the quant its author shipped it in: THREE shards (the per-layer
+    # token embedding table is in shard 1), and an ordinary quant, so selected small projections the kernels read as
+    # BF16 are Q4_K/Q5_0/Q6_K here and the pack converts them (see docs/ORCA.md for the precision impact)
+    "uncensored": {"title": "Qwen3.8-Flash-Next Uncensored",
+                   "by": "an abliterated fine-tune of Qwen3.8-Flash-Next, in a plain Q4_K_M quant",
+                   "about": "the same architecture without refusal training; one size (Q4_K_M), needs about 92 GB RAM",
+                   "hf": "https://huggingface.co/orcarouter/Qwen3.8-Flash-Next-Uncensored-GGUF/resolve/main/",
+                   "file": "Qwen3.8-Flash-Next-Uncensored-{q}-0000{i}-of-00003.gguf", "tag": "uncensored-",
+                   "shards": 3, "local": LOCAL_MODELS, "compat_bf16": True, "requires_source_build": True,
+                   "cuda_only": True,
+                   "mmproj_hf": "https://huggingface.co/orcarouter/Qwen3.8-Flash-Next-Uncensored-GGUF/resolve/main/",
+                   "mmproj": "mmproj-Qwen3.8-Flash-Next-Uncensored-F16.gguf", "name": "qwen3.8-flash-next-uncensored"},
 }
 MMPROJ = "mmproj-Qwen3.8-Flash-Next-BF16.gguf"
 # EXPERIMENTAL, off by default (setup asks): a control vector shipped with the repository, see its README
@@ -1585,7 +1609,8 @@ def write_run_script(model, cfg_path, port):
 # ------------------------------------------------------------------------------------------------ main
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--family", choices=list(FAMILIES), help="qwen = Qwen3.8-Flash-Next, swift = Swift 1.5")
+    ap.add_argument("--family", choices=list(FAMILIES),
+                    help="qwen = Qwen3.8-Flash-Next, swift = Swift 1.5, uncensored = Q4_K_M")
     ap.add_argument("--model", choices=list(MODELS))
     ap.add_argument("--context", type=int)
     ap.add_argument("--kv", choices=["int8", "q4_0", "k8v4"],
@@ -1610,7 +1635,7 @@ def main() -> int:
     ap.add_argument("--data-dir", help="where the model files go (~70-120 GB): default Strata-data next to this folder, "
                                        "remembered for every Strata folder on this PC")
     ap.add_argument("--models-dir", help="where the GGUF files go (default: <data folder>/models)")
-    ap.add_argument("--gguf-dir", help="use GGUF files you already have (a folder with the two shards)")
+    ap.add_argument("--gguf-dir", help="use GGUF files you already have (a folder with the model's shards)")
     ap.add_argument("--yes", action="store_true", help="accept the recommended answers")
     ap.add_argument("--setup", action="store_true", help="install another model or change settings")
     ap.add_argument("--no-start", action="store_true", help="install only, do not start the model")
@@ -1869,6 +1894,9 @@ def main() -> int:
         kv = ["int8", "q4_0"][int(ask("KV cache?", ["1", "2"], "1", a.yes)) - 1]
     if ctx > 8192:
         ok(f"KV cache: {'8-bit' if kv == 'int8' else '4-bit (Hadamard-rotated)'}")
+    if hip and fam.get("cuda_only"):
+        fail(f"{fam['title']} currently requires the NVIDIA CUDA backend",
+             "use an NVIDIA RTX 20 series or newer card")
     if hip:
         vision = "none"
         if a.vision not in (None, "no", "none"):
@@ -1899,13 +1927,17 @@ def main() -> int:
                 fail(f"the experimental speed projection's vector is missing: {esp}")
         ok("experimental speed projection: " + ("ON (experimental)" if esp else "off"))
     elif esp_choice.lower() not in ("", "off", "no", "n", "0"):
-        warn("the experimental speed projection is made for the original Qwen3.8-Flash-Next, not Swift 1.5: left off")
+        warn(f"the experimental speed projection is made for the original Qwen3.8-Flash-Next, not {fam['title']}: "
+             "left off")
     models_dir = Path(a.gguf_dir) if a.gguf_dir else Path(a.models_dir) / tag
-    shards = [models_dir / fam["file"].format(q=model, i=i) for i in (1, 2)]
+    # a family's files are spread over 2 (the GSQ-RCO releases) or 3 (the Uncensored release) shards, and which shard
+    # holds the n-gram table differs: step 7 finds the table's shard by reading the headers, not by its number
+    shards = [models_dir / fam["file"].format(q=model, i=i) for i in range(1, fam.get("shards", 2) + 1)]
     if not a.gguf_dir and not all(sh.exists() and done(sh) for sh in shards):
-        for r in elsewhere:                            # already downloaded in a Strata folder on another drive
-            cand = [r / "models" / tag / sh.name for sh in shards]
-            if all(c.exists() and done(c) for c in cand):
+        # a family's own folders (a snapshot already on this PC) first, then a Strata folder on another drive
+        for r in [*fam.get("local", ()), *(r / "models" / tag for r in elsewhere)]:
+            cand = [r / sh.name for sh in shards]
+            if all(c.is_file() and (done(c) or whole_shard(c)) for c in cand):
                 models_dir, shards = cand[0].parent, cand
                 ok(f"model files found in {models_dir}")
                 break
@@ -1927,7 +1959,7 @@ def main() -> int:
     step(4, "the Strata engine")
     llama = get_llama_cpp()
     ok(f"llama.cpp {LLAMA_CPP_COMMIT[:7]} (gguf-py, ggml, mtmd)")
-    eng = None if a.build or hip else get_prebuilt(a.prebuilt, gpu, vision)
+    eng = None if a.build or hip or fam.get("requires_source_build") else get_prebuilt(a.prebuilt, gpu, vision)
     if eng is not None and json.loads((eng / "BUILD.json").read_text()).get("source") != "local":
         pip_install(CUDA_WHEELS, "NVIDIA CUDA libraries (cuBLAS, CUDA runtime; ~0.4 GB)")
         if vision != "none" and not (eng / VEXE).exists():
@@ -1967,11 +1999,10 @@ def main() -> int:
     ok("model files present")
     mmproj = Path(a.models_dir) / fam["mmproj"]
     if not mmproj.exists():
-        mmproj = find_in(roots, f"models/{fam['mmproj']}") or mmproj
+        # the encoder that belongs to the shards found above: the family's own folder or --gguf-dir keeps its own
+        mmproj = find_in(roots, f"models/{fam['mmproj']}") or models_dir / fam["mmproj"]
     if vision != "none":
-        if not mmproj.exists() and a.gguf_dir and (Path(a.gguf_dir) / fam["mmproj"]).exists():
-            mmproj = Path(a.gguf_dir) / fam["mmproj"]
-        else:
+        if not mmproj.exists():
             download(fam["mmproj_hf"] + fam["mmproj"], mmproj, "vision encoder")
         ok(f"vision encoder: {mmproj}")
 
@@ -1990,12 +2021,15 @@ def main() -> int:
             run([sys.executable, str(ROOT / "tools" / "strata_tokenizer.py"), "--gguf", str(shards[0]),
                  "--out", str(pack)], env=env)   # writes <pack>/tokenizer/
     elif not (pack / "native_experts.txt").exists() or not (pack / "tokenizer" / "vocab.json").exists():
-        # every tensor as the GGUF stores it; the experts are read from the GGUF at start (seconds to build)
-        run([sys.executable, str(ROOT / "tools" / "iq_pack.py"), "--gguf", str(shards[0]), "--out", str(pack)], env=env)
+        # every tensor as the GGUF stores it; the experts are read from the GGUF at start (seconds to build).  A family
+        # in an ordinary quant (the Uncensored release's Q4_K_M) ships its small projections quantized too, and the
+        # pack rounds those few to BF16 - the form the residual, router, GDN and PLE kernels read (docs/ORCA.md)
+        run([sys.executable, str(ROOT / "tools" / "iq_pack.py"), "--gguf", str(shards[0]), "--out", str(pack)]
+            + (["--compat-bf16"] if fam.get("compat_bf16") else []), env=env)
     if low_ram and not (pack / "experts.bin").exists():
         say(f"  Writing the experts into one file for the low-RAM mode (one time, {MODELS[model]['arena_gb']:.0f} GB) ...")
         run([sys.executable, str(ROOT / "tools" / "iq_pack.py"), "--gguf", str(shards[0]), "--out", str(pack),
-             "--experts-bin"], env=env)
+             "--experts-bin"] + (["--compat-bf16"] if fam.get("compat_bf16") else []), env=env)
     ok(f"model prepared: {pack}")
     mtp = (find_in(roots, "mtp/rt/experts.bin") or data / "mtp/rt/experts.bin").parent.parent
     rt = mtp / "rt"

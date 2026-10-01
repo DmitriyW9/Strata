@@ -23,9 +23,17 @@ struct ExpertLayout {
     /// Plan v0.3 P6: per layer, the absolute offsets of the gate / up / down tensors in the model's shard 1, so
     /// the arena can be filled from the GGUF itself when the pack has no experts.bin (3 x n_layers, 0 = unknown).
     std::vector<uint64_t> gguf_off;
-    /// Per layer, the GGUF file (a name beside the --native shard) that holds its experts when the model's
-    /// shards split the layers (Swift's GGUFs: layers 13-47 in shard 2).  Empty = the --native shard itself.
+    /// Per ROLE (gate, up, down) and layer, the GGUF file (a name beside the --native shard) that holds those
+    /// tensors, for the models whose shards split a LAYER (3 x n_layers).  The Qwen3.8-Flash-Next files split one
+    /// layer's three roles across two shards - gate and up in shard 2, down in shard 1 - so one name per layer is
+    /// not enough; a line that names one file (native_experts.txt v3, Swift's layers 13-47 in shard 2) is stored
+    /// for all three roles.  Empty = the --native shard itself.
     std::vector<std::string> gguf_file;
+    /// The file the role `r` (0 gate, 1 up, 2 down) of layer `l` is read from; empty = the --native shard.
+    const std::string& gguf_file_for(int64_t l, int r) const {
+        static const std::string none;
+        return gguf_file.empty() ? none : gguf_file[(size_t) (3 * l + r)];
+    }
     uint64_t max_blob = BLOB;
     uint64_t total = 0;                   ///< experts.bin size
 

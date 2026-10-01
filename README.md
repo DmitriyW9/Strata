@@ -81,8 +81,9 @@ lower the RAM needed.
 Not sure? Take **IQ2_XS** - or the **Coder** if you mainly write code, or have 32-48 GB of RAM. You can add another
 one later with `SETUP.bat` (the same as `START-HERE.bat --setup`; on Linux `./setup.sh --setup`).
 
-For **OrcaRouter's Flash-Next Uncensored IQ3_XXS**, see the [manual compatibility setup](docs/ORCA.md).
-It needs an explicit packing conversion and is not an installer menu option.
+The setup menu also offers **OrcaRouter's Flash-Next Uncensored Q4_K_M**. It downloads about **119 GB** and needs
+about **92 GB of RAM**; setup finds its three shards in `~/projects/ai/LLM/models` or accepts `--gguf-dir`.
+The [manual IQ3_XXS compatibility setup](docs/ORCA.md) remains available separately.
 
 An **AMD Radeon RX 7900 XT / XTX on Linux** works too (experimental): `./setup.sh --backend hip`, chosen by itself on
 a PC with no NVIDIA card Strata can use. It installs ROCm without sudo and compiles the engine (one GPU, no images

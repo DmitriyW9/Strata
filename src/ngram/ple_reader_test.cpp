@@ -39,33 +39,34 @@ int g_fail = 0;
 
 constexpr uint64_t HEADER = 192;   // the real shard's data offset, so rows are misaligned the same way
 
-void expected_row(uint32_t row, uint8_t* out) {
-    for (uint32_t b = 0; b < ng::ROW_BYTES; ++b) out[b] = (uint8_t) ((row * 2654435761u + b * 97u) >> 7);
+void expected_row(uint32_t row, uint8_t* out, uint32_t row_bytes = ng::ROW_BYTES) {
+    for (uint32_t b = 0; b < row_bytes; ++b) out[b] = (uint8_t) ((row * 2654435761u + b * 97u) >> 7);
     std::memcpy(out, &row, 4);
 }
 
-bool make_table(const std::string& path, uint32_t rows) {
+bool make_table(const std::string& path, uint32_t rows, uint32_t row_bytes = ng::ROW_BYTES) {
     std::ofstream f(path, std::ios::binary);
     std::vector<uint8_t> head(HEADER, 0xAB);
     f.write((const char*) head.data(), (std::streamsize) head.size());
-    uint8_t r[ng::ROW_BYTES];
+    std::vector<uint8_t> r(row_bytes);
     for (uint32_t i = 0; i < rows; ++i) {
-        expected_row(i, r);
-        f.write((const char*) r, ng::ROW_BYTES);
+        expected_row(i, r.data(), row_bytes);
+        f.write((const char*) r.data(), row_bytes);
     }
     return (bool) f;
 }
 
-bool check_rows(ng::PleReader& rd, const std::vector<uint32_t>& rows, uint32_t n_rows, const char* what) {
-    std::vector<uint8_t> out(rows.size() * ng::ROW_BYTES, 0xCC);
+bool check_rows(ng::PleReader& rd, const std::vector<uint32_t>& rows, uint32_t n_rows, const char* what,
+                uint32_t row_bytes = ng::ROW_BYTES) {
+    std::vector<uint8_t> out(rows.size() * row_bytes, 0xCC);
     std::string err;
     const auto t = rd.issue(rows.data(), rows.size(), out.data());
     if (!rd.collect(t, err)) { CHECK(false, "%s: collect failed: %s", what, err.c_str()); return false; }
-    uint8_t want[ng::ROW_BYTES];
+    std::vector<uint8_t> want(row_bytes);
     for (size_t i = 0; i < rows.size(); ++i) {
-        if (rows[i] >= n_rows) std::memset(want, 0, sizeof want);
-        else expected_row(rows[i], want);
-        if (std::memcmp(want, &out[i * ng::ROW_BYTES], ng::ROW_BYTES) != 0) {
+        if (rows[i] >= n_rows) std::memset(want.data(), 0, row_bytes);
+        else expected_row(rows[i], want.data(), row_bytes);
+        if (std::memcmp(want.data(), &out[i * row_bytes], row_bytes) != 0) {
             CHECK(false, "%s: row %u (index %zu) differs", what, rows[i], i);
             return false;
         }
@@ -136,6 +137,30 @@ int selftest(const std::string& dir) {
         CHECK(rd.stats().late_injected > 0, "no read was held back");
     }
     std::filesystem::remove(path);
+    {
+        constexpr uint32_t Q5_ROW_BYTES = k::PLE_Q5_0_ROW_BYTES;
+        constexpr uint32_t Q5_ROWS = 5000;
+        const std::string q5_path = dir + "/ple_reader_q5_selftest.bin";
+        if (!make_table(q5_path, Q5_ROWS, Q5_ROW_BYTES)) {
+            std::fprintf(stderr, "cannot write %s\n", q5_path.c_str());
+            return 2;
+        }
+        ng::PleReader rd;
+        std::string err;
+        CHECK(rd.open(q5_path, HEADER, Q5_ROWS, 16, 256, err, true, Q5_ROW_BYTES), "Q5_0 row-size open: %s",
+              err.c_str());
+        std::vector<uint32_t> rows{0, 1, 17, 102, Q5_ROWS - 1, Q5_ROWS, 0xFFFFFFFFu};
+        check_rows(rd, rows, Q5_ROWS, "Q5_0 row-size", Q5_ROW_BYTES);
+        std::vector<uint32_t> straddles;
+        for (uint32_t r = 0; r < Q5_ROWS && straddles.size() < 32; ++r) {
+            const uint64_t at = HEADER + (uint64_t) r * Q5_ROW_BYTES;
+            if (at / ng::PAGE != (at + Q5_ROW_BYTES - 1) / ng::PAGE) straddles.push_back(r);
+        }
+        check_rows(rd, straddles, Q5_ROWS, "Q5_0 straddles", Q5_ROW_BYTES);
+        CHECK(rd.cache_size() <= rd.cache_capacity(), "Q5_0 row cache exceeded its bound");
+        rd.close();
+        std::filesystem::remove(q5_path);
+    }
     std::printf("ple_reader selftest: %s\n", g_fail ? "FAILED" : "OK");
     return g_fail ? 1 : 0;
 }

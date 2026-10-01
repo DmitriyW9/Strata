@@ -1,5 +1,6 @@
 #include "strata/core/native_head.hpp"
 #include "strata/artifact/gguf_reader.hpp"
+#include "strata/kernels/dequant_bf16.hpp"
 #include "strata/kernels/iq_kernels.hpp"
 #include "strata/kernels/native_mmvq.hpp"
 
@@ -110,13 +111,15 @@ bool NativeEmbed::load(const std::string& path, int64_t n_embd, int64_t n_vocab,
         const strata::TensorInfo* t = nullptr;
         for (const auto& c : gguf.tensors())
             if (c.name == "token_embd.weight") t = &c;
+        const int type = t ? (int) t->type : -1;
         if (!t || t->shape.size() != 2 || t->shape[0] != (uint64_t) n_embd || t->shape[1] != (uint64_t) n_vocab ||
-            !strata::kernels::iq_supported((int) t->type) || n_embd % 256) {
+            (!strata::kernels::is_iq(type) && !strata::kernels::dequant_bf16_supported(type)) || n_embd % 256) {
             err = "native embedding: token_embd.weight is absent, of another shape, or of a type without a GPU "
                   "dequantizer";
             return false;
         }
-        row_ = strata::kernels::iq_row_bytes((int) t->type, n_embd);
+        row_ = strata::kernels::is_iq(type) ? strata::kernels::iq_row_bytes(type, n_embd) :
+               (int64_t) strata::kernels::native_mmvq_weight_bytes(type, (int) n_embd, 1);
         bytes_ = (uint64_t) row_ * (uint64_t) n_vocab;
         if (cudaHostAlloc(&host_, bytes_, cudaHostAllocMapped | cudaHostAllocPortable) != cudaSuccess) {
             host_ = nullptr;
@@ -141,11 +144,17 @@ bool NativeEmbed::load(const std::string& path, int64_t n_embd, int64_t n_vocab,
 }
 
 void NativeEmbed::gather_dev(const int32_t* tokens, int64_t n_tok, float* out, void* stream) const {
-    strata::kernels::iq_embed_rows(type_, dev_, row_, tokens, n_tok, n_embd_, out, stream);
+    if (strata::kernels::is_iq(type_))
+        strata::kernels::iq_embed_rows(type_, dev_, (size_t) row_, tokens, n_tok, n_embd_, out, stream);
+    else
+        strata::kernels::dequant_embed_rows(type_, dev_, row_, tokens, n_tok, n_embd_, out, stream);
 }
 
 void NativeEmbed::gather_one(int64_t token, float* out, void* stream) const {
-    strata::kernels::iq_dequant_f32(type_, (const uint8_t*) dev_ + (size_t) token * row_, n_embd_, out, stream);
+    if (strata::kernels::is_iq(type_))
+        strata::kernels::iq_dequant_f32(type_, (const uint8_t*) dev_ + (size_t) token * row_, n_embd_, out, stream);
+    else
+        strata::kernels::dequant_f32(type_, dev_, token, 1, n_embd_, out, stream);
 }
 
 }  // namespace strata::core

@@ -122,10 +122,21 @@ bool expert_layout_load(const std::string& pack_dir, int64_t n_layers, int64_t n
             L.gguf_off[(size_t) (3 * l)] = go;
             L.gguf_off[(size_t) (3 * l + 1)] = uo;
             L.gguf_off[(size_t) (3 * l + 2)] = dox;
-            std::string file;             // v3: the shard that holds this layer (a file name beside --native)
-            if (ss >> file) {
-                if (L.gguf_file.empty()) L.gguf_file.assign((size_t) n_layers, std::string());
-                L.gguf_file[(size_t) l] = file;
+            // v3 names ONE file for the layer (Swift's GGUFs put layers 13-47 in shard 2); v4 names gate, up and
+            // down separately, because a file can split ONE LAYER between two shards (the Uncensored Q4_K_M keeps
+            // layer 4's gate and up in shard 2 and its down in shard 1).  "-" is the --native shard itself.
+            std::vector<std::string> names;
+            for (std::string name; ss >> name;) names.push_back(name);
+            if (names.size() == 1) names = {names[0], names[0], names[0]};   // v3: one file, all three roles
+            if (names.size() != 3 && !names.empty()) {
+                err = "native_experts.txt: layer " + std::to_string(l) +
+                      " names " + std::to_string(names.size()) + " shard(s), not one file or one per role: " + line;
+                return false;
+            }
+            if (!names.empty()) {
+                if (L.gguf_file.empty()) L.gguf_file.assign((size_t) (3 * n_layers), std::string());
+                for (int r = 0; r < 3; ++r)
+                    L.gguf_file[(size_t) (3 * l + r)] = names[r] == "-" ? std::string() : names[r];
             }
         }
         L.fmt[(size_t) l] = f;

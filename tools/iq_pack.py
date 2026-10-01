@@ -1,4 +1,5 @@
-"""tools/iq_pack.py - plan v0.3 P6: a native pack for any of the model files (Q2_0, IQ2_XS, IQ3_XXS).
+"""tools/iq_pack.py - plan v0.3 P6: a native pack for any of the model files (Q2_0, IQ2_XS, IQ3_XXS, and a plain
+K-quant file like Q4_K_M with --compat-bf16).
 
     python tools/iq_pack.py --gguf <model>-00001-of-00002.gguf --out pack/iq3_xxs            (standalone)
     python tools/iq_pack.py --gguf <model>-00001-of-00002.gguf --base pack/full --out ...    (share dense.bin)
@@ -18,8 +19,10 @@ its GGUF form:
   tokenizer/           exported from the GGUF (tools/strata_tokenizer.py), with the model's chat template.
 
 Split files: every shard of the model is read (<name>-0000N-of-0000M.gguf beside --gguf), so the layers may be
-split anyhow (Swift 1.5's GGUFs put layers 13-47 in shard 2 and the PLE table in shard 1).  A layer whose experts
-are not in shard 1 names its shard in native_experts.txt (v3).  Router tensors stored as F32 whose values are
+split anyhow (Swift 1.5's GGUFs put layers 13-47 in shard 2 and the PLE table in shard 1; the Uncensored Q4_K_M's
+three shards split ONE layer, whose gate and up are in shard 2 while its down is in shard 1).  A layer whose experts
+are not all in shard 1 names their files in native_experts.txt - one name for the whole layer (v3), or one per role
+with "-" for --gguf itself (v4).  Router tensors stored as F32 whose values are
 exactly BF16 (Swift 1.5) are written as BF16, the form the engine's router takes; anything else is refused.
 
 For ordinary quants, --compat-bf16 dequantizes the small projections that the engine reads as BF16, using
@@ -308,18 +311,23 @@ def main() -> int:
         blob = per[0] + per[1] + per[2]
         layout.append((l, ts[0].type_id, ts[2].type_id, offset, blob, ts))
         offset += blob * n_expert
+    role_split = any(len({model.where[t.name][3] for t in ts}) > 1 for _, _, _, _, _, ts in layout)
+    version = 4 if role_split else 3
     with open(out / "native_experts.txt", "w", encoding="utf-8", newline="\n") as fo:
-        fo.write("# strata native experts v3: layer gu_type d_type offset blob_bytes gate_off up_off down_off [shard] "
-                 "(n_expert %d, total %d; absolute offsets in %s, or in the named shard beside it)\n"
-                 % (n_expert, offset, src.name))
+        fo.write("# strata native experts v%d: layer gu_type d_type offset blob_bytes gate_off up_off down_off "
+                 "[shard | gate_shard up_shard down_shard] (n_expert %d, total %d; absolute offsets in %s, or in the "
+                 "named shards beside it; \"-\" is %s itself)\n" % (version, n_expert, offset, src.name, src.name))
         for l, gt, dt, off, blob, ts in layout:
             ws = [model.where[t.name] for t in ts]
-            if len({w[3] for w in ws}) != 1:
-                print("layer %d: its gate/up/down tensors are in different shards" % l)
-                return 1
-            gg, shard = ws[0][0], ws[0][3]
+            gg, shards = ws[0][0], [w[3] for w in ws]
             line = "%d %d %d %d %d %d %d %d" % (l, gt, dt, off, blob, *[gg.data_start + t.offset for t in ts])
-            fo.write(line + ("" if shard == src else " " + shard.name) + "\n")
+            if len(set(shards)) == 1:
+                line += "" if shards[0] == src else " " + shards[0].name      # v3: the whole layer is in one file
+            else:
+                # a file that splits ONE layer (the Uncensored Q4_K_M's layer 4: gate and up in shard 2, down in 1):
+                # name each role's file, "-" for the --native shard itself
+                line += " " + " ".join("-" if s == src else s.name for s in shards)
+            fo.write(line + "\n")
     if a.skip_experts or not a.experts_bin:
         if (out / "experts.bin").exists() and not a.experts_bin:
             print("note: %s/experts.bin exists; the engine reads it instead of the GGUF" % out)

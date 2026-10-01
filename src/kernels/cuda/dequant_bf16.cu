@@ -160,6 +160,19 @@ __global__ void dequant_kernel(const uint8_t* __restrict__ blocks, int64_t row_b
     group32<TYPE>(blocks + (row0 + r) * row_bytes, (int) gi, out + r * groups_per_row * 32 + gi * 32);
 }
 
+template <int TYPE>
+__global__ void embed_rows_kernel(const uint8_t* __restrict__ table, int64_t row_bytes,
+                                  const int32_t* __restrict__ tokens, int64_t n_tok, int64_t n_embd,
+                                  float* __restrict__ out) {
+    const int64_t groups_per_row = n_embd / 32;
+    const int64_t group = (int64_t) blockIdx.x * blockDim.x + threadIdx.x;
+    if (group >= n_tok * groups_per_row) return;
+    const int64_t token = group / groups_per_row;
+    const int64_t group_in_row = group % groups_per_row;
+    const uint8_t* row = table + (int64_t) tokens[token] * row_bytes;
+    group32<TYPE>(row, (int) group_in_row, out + token * n_embd + group_in_row * 32);
+}
+
 bool geometry(int type, int& block_elems, int& block_bytes) {
     switch (type) {
     case 2: block_elems = 32; block_bytes = 18; return true;
@@ -240,6 +253,42 @@ void dequant_f32(int ggml_type, const void* blocks, int64_t row0, int64_t rows, 
         return;
     }
     launch<float>(ggml_type, blocks, row0, rows, cols, out, stream);
+}
+
+void dequant_embed_rows(int type, const void* table, int64_t row_bytes, const int32_t* tokens, int64_t n_tok,
+                        int64_t n_embd, float* out, void* stream) {
+    int block_elems = 0, block_bytes = 0;
+    if (!geometry(type, block_elems, block_bytes) || n_tok <= 0 || n_embd <= 0 || n_embd % block_elems != 0 ||
+        row_bytes != (n_embd / block_elems) * block_bytes) {
+        std::fprintf(stderr, "dequant embedding: unsupported type %d or shape %lld x %lld\n", type,
+                     (long long) n_tok, (long long) n_embd);
+        std::exit(1);
+    }
+    const int64_t groups = n_tok * (n_embd / 32);
+    const unsigned grid = (unsigned) ((groups + 255) / 256);
+    const uint8_t* p = (const uint8_t*) table;
+    const unsigned block = 256;
+    cudaStream_t st = (cudaStream_t) stream;
+#define STRATA_EMBED_ROWS(TY) \
+    embed_rows_kernel<TY><<<grid, block, 0, st>>>(p, row_bytes, tokens, n_tok, n_embd, out); break
+    switch (type) {
+    case 2: STRATA_EMBED_ROWS(2);
+    case 6: STRATA_EMBED_ROWS(6);
+    case 8: STRATA_EMBED_ROWS(8);
+    case 11: STRATA_EMBED_ROWS(11);
+    case 12: STRATA_EMBED_ROWS(12);
+    case 13: STRATA_EMBED_ROWS(13);
+    case 14: STRATA_EMBED_ROWS(14);
+    case 20: STRATA_EMBED_ROWS(20);
+    case 23: STRATA_EMBED_ROWS(23);
+    case 42: STRATA_EMBED_ROWS(42);
+    default:
+        std::fprintf(stderr, "dequant embedding: unsupported type %d\n", type);
+        std::exit(1);
+    }
+#undef STRATA_EMBED_ROWS
+    const cudaError_t e = cudaGetLastError();
+    if (e != cudaSuccess) { std::fprintf(stderr, "dequant embedding launch: %s\n", cudaGetErrorString(e)); std::exit(1); }
 }
 
 }  // namespace strata::kernels

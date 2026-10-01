@@ -1,5 +1,5 @@
 // include/strata/kernels/iq_kernels.hpp - the i-quant formats (IQ1_M, IQ2_XXS, IQ2_XS, IQ2_S, IQ3_XXS, IQ3_S,
-// IQ4_NL) and Q2_0 on the GPU for the IQ2_XS / IQ3_XXS model files.
+// IQ4_NL) and the plain/K quants used by the Qwen3.8-Flash-Next models.
 //
 // The block layouts, codebook grids and dot products are llama.cpp's (ggml-common.h, ggml-cuda/vecdotq.cuh,
 // ggml-cuda/dequantize.cuh; MIT, see third_party/ggml/LICENSE and VERSION.txt), so a weight means exactly what it
@@ -11,7 +11,11 @@
 
 namespace strata::kernels {
 
-/// ggml type ids handled here.
+/// The literal i-quant formats handled by this module.
+bool is_iq(int ggml_type) noexcept;
+/// The plain/K-quant formats handled by the native paths (Q2_0, Q3_K, Q4_K, Q5_0, Q6_K, Q8_0).
+bool k_quant_supported(int ggml_type) noexcept;
+/// ggml type ids supported by either the i-quant or plain/K-quant paths.
 bool iq_supported(int ggml_type) noexcept;
 /// Bytes of one row of `n` values of `ggml_type` (n a multiple of the type's block).
 size_t iq_row_bytes(int ggml_type, int64_t n) noexcept;
