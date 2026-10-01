@@ -20,20 +20,14 @@ struct ExpertLayout {
     int64_t n_layers = 0, n_expert = NE;
     std::vector<NativeFmt> fmt;           ///< per layer (native packs)
     std::vector<uint64_t> offset, bytes;  ///< per layer: where its 512 blobs start, bytes per blob
-    /// Plan v0.3 P6: per layer, the absolute offsets of the gate / up / down tensors in the model's shard 1, so
-    /// the arena can be filled from the GGUF itself when the pack has no experts.bin (3 x n_layers, 0 = unknown).
+    /// Plan v0.3 P6: per layer, the absolute offsets of the gate / up / down tensors in their GGUF files, so the
+    /// arena can be filled from the GGUF itself when the pack has no experts.bin (3 x n_layers, 0 = unknown).
     std::vector<uint64_t> gguf_off;
-    /// Per ROLE (gate, up, down) and layer, the GGUF file (a name beside the --native shard) that holds those
-    /// tensors, for the models whose shards split a LAYER (3 x n_layers).  The Qwen3.8-Flash-Next files split one
-    /// layer's three roles across two shards - gate and up in shard 2, down in shard 1 - so one name per layer is
-    /// not enough; a line that names one file (native_experts.txt v3, Swift's layers 13-47 in shard 2) is stored
-    /// for all three roles.  Empty = the --native shard itself.
+    /// Per layer and role (gate, up, down), the GGUF file beside --native that holds the tensor.
+    /// v3 stores one filename for all roles; v4 stores one filename per role when a shard boundary
+    /// falls inside a layer. Empty = the --native shard itself.
     std::vector<std::string> gguf_file;
-    /// The file the role `r` (0 gate, 1 up, 2 down) of layer `l` is read from; empty = the --native shard.
-    const std::string& gguf_file_for(int64_t l, int r) const {
-        static const std::string none;
-        return gguf_file.empty() ? none : gguf_file[(size_t) (3 * l + r)];
-    }
+    int version = 0;                      ///< native_experts.txt's header version (0 = none given)
     uint64_t max_blob = BLOB;
     uint64_t total = 0;                   ///< experts.bin size
 
@@ -49,6 +43,11 @@ struct ExpertLayout {
 /// Plan v0.3 P6: whether this CPU (and its OS) runs the AVX-512 kernels (F, BW, VL, VNNI, VBMI).  Probed in a
 /// file compiled without AVX-512, so asking is safe everywhere; STRATA_FORCE_AVX2=1 answers no (for tests).
 bool cpu_avx512_ok();
+/// Whether this CPU (and its OS) runs the AVX2 kernels (AVX, AVX2, FMA, F16C): the floor of every expert kernel
+/// (q2_avx2.cpp, iq_avx2.cpp, and ggml-cpu in the portable build).  STRATA_FORCE_AVX2 does not change it.
+bool cpu_avx2_ok();
+/// The CPU's brand string (CPUID 0x80000002..4), for messages; "unknown" when it has none.
+std::string cpu_name();
 /// Q2_0 GGUF rows / activation quantizer on the kernels this CPU has.
 void q2_rows_any(const uint8_t* w, size_t row_bytes, int nblocks, const ActQ* const* a, int nt, float* const* out,
                  int r0, int r1);
@@ -57,6 +56,10 @@ void act_quant_any(const float* x, int n, ActQ& a);
 /// The process-wide layout (canonical Q2_0 until `expert_layout_load` finds a native pack).
 const ExpertLayout& expert_layout();
 /// Reads `<pack_dir>/native_experts.txt` when it exists (a native pack), else sets the canonical layout.
+/// Versions up to kExpertLayoutVersion are read; a newer one is refused (a newer packer wrote it).
 bool expert_layout_load(const std::string& pack_dir, int64_t n_layers, int64_t n_expert, std::string& err);
+/// The newest native_experts.txt this engine reads.  v4 = v3 plus the per-role shard column `gate,up,down`,
+/// written only when some layer's roles are in different shards (every other pack stays v3, byte for byte).
+inline constexpr int kExpertLayoutVersion = 4;
 
 }  // namespace strata::kernels::cpu
