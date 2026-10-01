@@ -1218,7 +1218,7 @@ __device__ void dq_q8_0(const void* vx, int64_t ibs, dst_t* yy, int tid) {
     for (int j = 0; j < 8; ++j) y[j] = cvt<dst_t>((float) x[ib].qs[8 * il + j] * d);
 }
 
-// Every type below must also be in is_iq(): the host entry points refuse the others, so the default is unreachable.
+// Keep the i-quant and plain/K type predicates aligned with the dispatch cases below; unsupported types are refused.
 template<typename dst_t>
 __device__ __forceinline__ void dq_dispatch(int ty, const void* vx, int64_t ibs, dst_t* y, int tid) {
     switch (ty) {
