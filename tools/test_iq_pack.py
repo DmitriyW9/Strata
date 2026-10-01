@@ -21,7 +21,11 @@ import iq_pack
 def write_gguf(path, tensors):
     writer = GGUFWriter(path, "qwen4exp")
     for name, values, kind in tensors:
-        writer.add_tensor(name, quants.quantize(values, kind), raw_dtype=kind)
+        if kind == Q.Q4_K:
+            encoded = np.zeros(quants.quant_shape_to_byte_shape(values.shape, kind), dtype=np.uint8)
+            writer.add_tensor(name, encoded, raw_dtype=kind)
+        else:
+            writer.add_tensor(name, quants.quantize(values, kind), raw_dtype=kind)
     writer.write_header_to_file()
     writer.write_kv_data_to_file()
     writer.write_tensors_to_file()
@@ -144,6 +148,32 @@ class CompatibilityTests(unittest.TestCase):
             (root / "blob2").write_bytes((root / "blob2").read_bytes()[:-64])
             with self.assertRaisesRegex(ValueError, "truncated tensor"):
                 iq_pack.Model(first)
+
+    def test_layer_roles_split_across_gguf_shards(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            root = Path(tmp)
+            first = root / "model-00001-of-00002.gguf"
+            second = root / "model-00002-of-00002.gguf"
+            experts = np.ones((2, 256, 256), dtype=np.float32)
+            write_gguf(first, [
+                ("blk.0.ffn_gate_inp.weight", np.ones((2, 256), dtype=np.float32), Q.BF16),
+                ("blk.0.ffn_gate_exps.weight", experts, Q.Q4_K),
+                ("blk.0.ffn_down_exps.weight", experts, Q.Q8_0),
+            ])
+            write_gguf(second, [("blk.0.ffn_up_exps.weight", experts, Q.Q4_K)])
+            out = root / "pack"
+            (out / "tokenizer").mkdir(parents=True)
+            for name in ["vocab.json", "chat_template.jinja"]:
+                (out / "tokenizer" / name).touch()
+
+            with patch.object(sys, "argv", ["iq_pack.py", "--gguf", str(first), "--out", str(out)]):
+                with contextlib.redirect_stdout(io.StringIO()):
+                    self.assertEqual(iq_pack.main(), 0)
+
+            lines = (out / "native_experts.txt").read_text().splitlines()
+            self.assertIn("native experts v4", lines[0])
+            role_line = next(line for line in lines if not line.startswith("#"))
+            self.assertTrue(role_line.endswith(f"- {second.name} -"), role_line)
 
 
 if __name__ == "__main__":
