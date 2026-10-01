@@ -42,11 +42,13 @@ inline constexpr int32_t TOKEN_NULL = -1;       // LLAMA_TOKEN_NULL
 inline constexpr float NG_RMS_EPS = 1e-6f;
 
 // The table is [160, 320001536]. ne0 = 160 is the FAST axis, so one row is 5 quant blocks.
-// IQ4_NL uses 90 bytes per row; the Uncensored Q4_K_M release uses Q5_0 at 110 bytes per row.
+// IQ4_NL uses 90 bytes, Q5_0 uses 110 bytes, and the packed FP8 E4M3 table uses 160 bytes per row.
 inline constexpr uint64_t PLE_TABLE_ROWS = 320001536ull;
 inline constexpr int PLE_ROW_BYTES = (PLE_HEAD_DIM / 32) * 18;           // IQ4_NL: 90
 inline constexpr int PLE_Q5_0_ROW_BYTES = (PLE_HEAD_DIM / 32) * 22;      // Q5_0: 110
-inline constexpr int PLE_MAX_ROW_BYTES = PLE_Q5_0_ROW_BYTES;
+inline constexpr int PLE_ROW_BYTES_FP8 = PLE_HEAD_DIM;                   // 160: an F8_E4M3 row, one byte a value
+inline constexpr int PLE_ROW_BYTES_MAX = PLE_ROW_BYTES_FP8;
+inline constexpr int PLE_MAX_ROW_BYTES = PLE_ROW_BYTES_MAX;
 
 /// The artifact's own hash constants, transcribed from `docs/gguf-dump-shard1.txt`:
 ///
@@ -98,6 +100,11 @@ int iq4nl_code(int code);
 /// a perfectly plausible embedding of the wrong 160 values.
 void iq4nl_dequant_row(const uint8_t* row, float* out160);
 
+/// One FP8 row -> 160 floats: each byte an E4M3 value (the "fn" variant: no infinities, 0x7F/0xFF are NaN), times the
+/// table's one scale. This is the table as Qwen3.8-Flash-Next ships it (`...ngram_embedding.shard_k`, F8_E4M3, and
+/// `weight_scale`), kept byte for byte by tools/ple_fp8_pack.py; IQ4_NL is 8% off it per row.
+void fp8_e4m3_dequant_row(const uint8_t* row, float scale, float* out160);
+
 /// How the table's rows are read (plan v0.3 P2). `Direct` is the default: unbuffered 4 KiB reads from the SSD,
 /// so the table never occupies RAM or the OS file cache. `Mmap` is the earlier memory-mapped path, kept as the
 /// A/B arm; it returns the same bytes.
@@ -115,6 +122,11 @@ struct PleIoOptions {
     /// Mmap mode only (`--ple-io ram`): lock the whole mapped table in RAM at open, so no SSD read ever sits on
     /// the prompt or token path. Needs RAM for the full table. POSIX only (mlock); `locked()` reports the outcome.
     bool lock = false;
+    /// Direct mode with the I/O worker only: keep the SSD awake while rows are asked for - one page of the table
+    /// after this long without a read (0 = off), until `keepalive_window_s` after the last request for rows
+    /// (see PleReader::set_keepalive).
+    double keepalive_ms = 0;
+    double keepalive_window_s = 60;
 };
 
 /// The PLE table.  Held by pointer-to-impl so this header does not drag `<windows.h>` into every
@@ -141,17 +153,17 @@ public:
     /// Fault injection (Direct mode): every row read completes no earlier than `us` after issue.
     void set_injected_delay_us(double us);
 
-    /// Maps the ORIGINAL second GGUF shard read-only.  The tensor's data does NOT start at file offset 0:
-    /// the manifest's `shard2_tensor.offset` is relative to the GGUF's DATA SECTION, and the header before it
-    /// is 192 bytes.  Reading at 0 would silently decode the header plus 192 bytes of shifted rows - still
-    /// plausible IQ4_NL, which is why the reader takes the offset from a real GGUF parse (`GgufFile`, the
-    /// project's validated reader) and checks that the tensor exactly fills the rest of the file.
+    /// Maps the GGUF shard containing the table read-only. The tensor's data does NOT start at file offset 0:
+    /// its offset is relative to the GGUF's DATA SECTION. Reading at 0 would decode the header plus shifted rows,
+    /// which is why the reader takes the offset from a real GGUF parse (`GgufFile`) and validates its bounds.
     bool open(const std::string& gguf_path, std::string& err);
     void close();
     bool is_open() const;
     /// True when `PleIoOptions::lock` was asked for and mlock succeeded (false: pages only pre-touched).
     bool locked() const;
     uint64_t rows() const;
+    /// "IQ4_NL", "Q5_0", or "F8_E4M3" (the packed table is type I8 with strata.ple.format = f8_e4m3).
+    const char* format() const;
 
     /// 16 row indices -> 2560 floats.  The gathered rows are flattened HEAD-SLOWEST: row h's 160 values
     /// occupy `out[h*160, (h+1)*160)`, which is what `ggml_get_rows` does and what makes the result a plain

@@ -17,6 +17,8 @@ bool is_iq(int ggml_type) noexcept;
 bool k_quant_supported(int ggml_type) noexcept;
 /// ggml type ids supported by either the i-quant or plain/K-quant paths.
 bool iq_supported(int ggml_type) noexcept;
+/// The token-embedding types iq_embed_rows and iq_dequant_f32 read: the i-quants above and BF16 (30).
+bool embed_type_supported(int ggml_type) noexcept;
 /// Bytes of one row of `n` values of `ggml_type` (n a multiple of the type's block).
 size_t iq_row_bytes(int ggml_type, int64_t n) noexcept;
 
