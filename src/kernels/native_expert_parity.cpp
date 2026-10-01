@@ -18,6 +18,7 @@
 #include "strata/kernels/cpu/kq_avx2.hpp"
 #include "strata/kernels/cpu/expert_layout.hpp"
 #include "ggml-cpu.h"
+#include "strata/kernels/dequant_bf16.hpp"
 #include "strata/kernels/iq_kernels.hpp"
 
 #include "ggml.h"
@@ -334,8 +335,13 @@ int check_blob(const cpu::NativeFmt& f, const std::vector<uint8_t>& blob, int se
                 {(const uint8_t*) dblob, f.gu_type, &G}, {(const uint8_t*) dblob + f.up_off, f.gu_type, &U},
                 {(const uint8_t*) dblob + f.down_off, f.d_type, &D}};
             for (const auto& m : mats) {
-                strata::kernels::iq_dequant_f32(m.type, m.src, FF * H, dq, s);
-                strata::kernels::iq_dequant_f16(m.type, m.src, FF * H, dh, s);
+                if (strata::kernels::is_iq(m.type)) {
+                    strata::kernels::iq_dequant_f32(m.type, m.src, FF * H, dq, s);
+                    strata::kernels::iq_dequant_f16(m.type, m.src, FF * H, dh, s);
+                } else {
+                    strata::kernels::dequant_f32(m.type, m.src, 0, FF, H, dq, s);
+                    strata::kernels::dequant_f16(m.type, m.src, 0, FF, H, dh, s);
+                }
                 cudaStreamSynchronize(s);
                 cudaMemcpy(got_dq.data(), dq, got_dq.size() * 4, cudaMemcpyDeviceToHost);
                 cudaMemcpy(got_h.data(), dh, got_h.size() * 2, cudaMemcpyDeviceToHost);
@@ -346,7 +352,10 @@ int check_blob(const cpu::NativeFmt& f, const std::vector<uint8_t>& blob, int se
                 }
             }
             // the gate matrix as an embedding table of FF rows of H values
-            strata::kernels::iq_embed_rows(f.gu_type, dblob, f.gu_row, dtk, FF, H, dq, s);
+            if (strata::kernels::is_iq(f.gu_type))
+                strata::kernels::iq_embed_rows(f.gu_type, dblob, f.gu_row, dtk, FF, H, dq, s);
+            else
+                strata::kernels::dequant_embed_rows(f.gu_type, dblob, (int64_t) f.gu_row, dtk, FF, H, dq, s);
             cudaStreamSynchronize(s);
             cudaMemcpy(got_dq.data(), dq, got_dq.size() * 4, cudaMemcpyDeviceToHost);
             size_t emb_differ = 0;

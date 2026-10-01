@@ -164,6 +164,19 @@ __global__ void dequant_kernel(const uint8_t* __restrict__ blocks, int64_t row_b
 }
 
 template <int TYPE>
+__global__ void dequant_gu_kernel(const uint8_t* __restrict__ gate, const uint8_t* __restrict__ up,
+                                  int64_t row_bytes, int64_t rows, int64_t groups_per_row, H16* __restrict__ out) {
+    const int64_t g = (int64_t) blockIdx.x * blockDim.x + threadIdx.x;
+    if (g >= rows * groups_per_row) return;
+    const int64_t r = g / groups_per_row, gi = g % groups_per_row;
+    for (int parity = 0; parity < 2; ++parity) {
+        const uint8_t* matrix = parity ? up : gate;
+        group32<TYPE>(matrix + r * row_bytes, (int) gi,
+                      out + ((2 * r + parity) * groups_per_row + gi) * 32);
+    }
+}
+
+template <int TYPE>
 __global__ void embed_rows_kernel(const uint8_t* __restrict__ table, int64_t row_bytes,
                                   const int32_t* __restrict__ tokens, int64_t n_tok, int64_t n_embd,
                                   float* __restrict__ out) {
@@ -247,6 +260,40 @@ void dequant_f16(int ggml_type, const void* blocks, int64_t row0, int64_t rows, 
         return;
     }
     launch<H16>(ggml_type, blocks, row0, rows, cols, reinterpret_cast<H16*>(out), stream);
+}
+
+void dequant_gu_f16(int type, const void* gate, const void* up, int64_t n_ff, int64_t n_embd, uint16_t* out,
+                    void* stream) {
+    int be = 0, bb = 0;
+    if (!geometry(type, be, bb) || n_embd % be != 0 || n_embd % 32 != 0 || n_ff <= 0) {
+        std::fprintf(stderr, "dequant gate/up: unsupported type %d or shape %lld x %lld\n", type, (long long) n_ff,
+                     (long long) n_embd);
+        std::exit(1);
+    }
+    const int64_t row_bytes = n_embd / be * bb, gpr = n_embd / 32, total = n_ff * gpr;
+    const unsigned grid = (unsigned) ((total + 255) / 256);
+    const uint8_t* g = (const uint8_t*) gate;
+    const uint8_t* u = (const uint8_t*) up;
+    cudaStream_t st = (cudaStream_t) stream;
+#define STRATA_DQ_GU(TY) dequant_gu_kernel<TY><<<grid, 256, 0, st>>>(g, u, row_bytes, n_ff, gpr, reinterpret_cast<H16*>(out)); break
+    switch (type) {
+    case 2: STRATA_DQ_GU(2);
+    case 6: STRATA_DQ_GU(6);
+    case 8: STRATA_DQ_GU(8);
+    case 11: STRATA_DQ_GU(11);
+    case 12: STRATA_DQ_GU(12);
+    case 13: STRATA_DQ_GU(13);
+    case 14: STRATA_DQ_GU(14);
+    case 20: STRATA_DQ_GU(20);
+    case 23: STRATA_DQ_GU(23);
+    case 42: STRATA_DQ_GU(42);
+    default:
+        std::fprintf(stderr, "dequant gate/up: unsupported type %d\n", type);
+        std::exit(1);
+    }
+#undef STRATA_DQ_GU
+    const cudaError_t e = cudaGetLastError();
+    if (e != cudaSuccess) { std::fprintf(stderr, "dequant gate/up launch: %s\n", cudaGetErrorString(e)); std::exit(1); }
 }
 
 void dequant_f32(int ggml_type, const void* blocks, int64_t row0, int64_t rows, int64_t cols, float* out, void* stream) {

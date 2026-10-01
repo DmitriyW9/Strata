@@ -16,6 +16,7 @@
 #include "strata/kernels/kv_stream.hpp"
 #include "strata/kernels/cvec.hpp"
 #include "strata/kernels/kv_q4.hpp"
+#include "strata/kernels/dequant_bf16.hpp"
 #include "strata/core/layer.hpp"
 #include "strata/core/native_head.hpp"
 #include "strata/kernels/verify_kernels.hpp"
@@ -1696,9 +1697,18 @@ bool Prefill::run(const int64_t* tokens, int64_t n, int64_t pos0, std::string& e
                         if (lay.native) {
                             // plan v0.3 P6: a native pack's layer, dequantized by llama.cpp's own formulas
                             const auto& f = lay.fmt[(size_t) l];
-                            strata::kernels::iq_dequant_gu_f16(f.gu_type, blob_dev, blob_dev + f.up_off, f.n_ff, f.n_embd,
-                                                               m.dq_gu[q], m.cs);
-                            strata::kernels::iq_dequant_f16(f.d_type, blob_dev + f.down_off, f.n_embd * f.n_ff, m.dq_d[q], m.cs);
+                            if (strata::kernels::is_iq(f.gu_type))
+                                strata::kernels::iq_dequant_gu_f16(f.gu_type, blob_dev, blob_dev + f.up_off, f.n_ff,
+                                                                   f.n_embd, m.dq_gu[q], m.cs);
+                            else
+                                strata::kernels::dequant_gu_f16(f.gu_type, blob_dev, blob_dev + f.up_off, f.n_ff,
+                                                                f.n_embd, m.dq_gu[q], m.cs);
+                            if (strata::kernels::is_iq(f.d_type))
+                                strata::kernels::iq_dequant_f16(f.d_type, blob_dev + f.down_off,
+                                                                f.n_embd * f.n_ff, m.dq_d[q], m.cs);
+                            else
+                                strata::kernels::dequant_f16(f.d_type, blob_dev + f.down_off, 0, f.n_embd, f.n_ff,
+                                                             m.dq_d[q], m.cs);
                         } else {
                             blob_dequant_f16(blob_dev, m.dq_gu[q], m.dq_d[q], m.cs);
                         }

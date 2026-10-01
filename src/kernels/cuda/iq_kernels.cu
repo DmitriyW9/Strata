@@ -442,6 +442,26 @@ __device__ __forceinline__ float vec_dot_q8_0_q8_1(const void* __restrict__ vbq,
     const float d8_0 = __half2float(bq8_0->d), d8_1 = __low2float(bq8_1->ds);
     return d8_0 * d8_1 * ((float) sumi);
 }
+// Q5_0 expert down projections (ggml type 6). One call handles eight values from a 32-value block;
+// Q5_0 is symmetric around zero, so its stored 5-bit values have a bias of 16 and no separate minimum.
+__device__ __forceinline__ float vec_dot_q5_0_q8_1(const void* __restrict__ vbq, const block_q8_1* __restrict__ bq8_1,
+                                                   const int& kbx, const int& iqs) {
+    const block_q5_0* bq5_0 = (const block_q5_0*) vbq + kbx;
+    const uint32_t qh = (uint32_t) bq5_0->qh[0] | ((uint32_t) bq5_0->qh[1] << 8) |
+                        ((uint32_t) bq5_0->qh[2] << 16) | ((uint32_t) bq5_0->qh[3] << 24);
+    const int start = iqs * 8;
+    int sumi = 0;
+#pragma unroll
+    for (int j = 0; j < 8; ++j) {
+        const int idx = start + j;
+        const int nibble = idx < 16 ? (bq5_0->qs[idx] & 0x0F) : (bq5_0->qs[idx - 16] >> 4);
+        const int high_bit = (int) ((qh >> idx) & 1u);
+        const int weight = nibble | (high_bit << 4);
+        const int activation = ((const int8_t*) bq8_1->qs)[idx];
+        sumi += (weight - 16) * activation;
+    }
+    return __half2float(bq5_0->d) * __low2float(bq8_1->ds) * (float) sumi;
+}
 
 // ---------------------------------------------------------------- the formats
 // qk = values per block, ipb = dot calls per block (qi / vdr), step = the iqs stride between calls.
@@ -470,14 +490,16 @@ template<> struct Fmt<13> { static constexpr int qk = 256, ipb = QI5_K / VDR_Q5_
     __device__ static float dot(const void* v, const block_q8_1* y, int kbx, int iqs) { return vec_dot_q5_K_q8_1(v, y, kbx, iqs); } };
 template<> struct Fmt<7> { static constexpr int qk = 32, ipb = QI5_1 / VDR_Q5_1, step = VDR_Q5_1;
     __device__ static float dot(const void* v, const block_q8_1* y, int kbx, int iqs) { return vec_dot_q5_1_q8_1(v, y, kbx, iqs); } };
+template<> struct Fmt<6> { static constexpr int qk = 32, ipb = 4, step = 1;
+    __device__ static float dot(const void* v, const block_q8_1* y, int kbx, int iqs) { return vec_dot_q5_0_q8_1(v, y, kbx, iqs); } };
 template<> struct Fmt<8> { static constexpr int qk = 32, ipb = QI8_0 / VDR_Q8_0, step = VDR_Q8_0;
     __device__ static float dot(const void* v, const block_q8_1* y, int kbx, int iqs) { return vec_dot_q8_0_q8_1(v, y, kbx, iqs); } };
 
 // The formats of each role, one list each so a type cannot be in one switch and missing from another.  Every
 // entry is a kernel template for each CUDA architecture of the build, hence two lists rather than one.
 #define STRATA_GU_FMTS(X) X(16) X(17) X(18) X(21) X(22) X(23) X(29) X(42) X(12) X(13) X(8)
-#define STRATA_D_FMTS(X) X(20) X(23) X(42) X(7) X(8)
-#define STRATA_MMVQ_FMTS(X) X(16) X(17) X(18) X(20) X(21) X(22) X(23) X(29) X(42) X(12) X(13) X(7) X(8)
+#define STRATA_D_FMTS(X) X(20) X(23) X(42) X(6) X(7) X(8)
+#define STRATA_MMVQ_FMTS(X) X(16) X(17) X(18) X(20) X(21) X(22) X(23) X(29) X(42) X(12) X(13) X(6) X(7) X(8)
 
 __device__ __forceinline__ float warp_sum(float v) {
 #pragma unroll

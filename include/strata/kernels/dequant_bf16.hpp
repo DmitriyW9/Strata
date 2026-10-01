@@ -21,6 +21,10 @@ void dequant_bf16(int ggml_type, const void* blocks, int64_t row0, int64_t rows,
 void dequant_f16(int ggml_type, const void* blocks, int64_t row0, int64_t rows, int64_t cols, uint16_t* out,
                  void* stream);
 
+/// Gate/up matrices into interleaved FP16 rows (gate row 0, up row 0, gate row 1, up row 1, ...).
+void dequant_gu_f16(int ggml_type, const void* gate, const void* up, int64_t n_ff, int64_t n_embd, uint16_t* out,
+                    void* stream);
+
 /// The same into FP32 (tests and small tensors).
 void dequant_f32(int ggml_type, const void* blocks, int64_t row0, int64_t rows, int64_t cols, float* out, void* stream);
 
