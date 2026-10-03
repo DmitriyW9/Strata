@@ -1,0 +1,61 @@
+{
+ "config": "strata-uncensored-q4_k_m.json",
+ "runs": 2,
+ "max_new": 256,
+ "arms": [
+  {
+   "arm": "default",
+   "why": "the config as it is (since 0.1.37: transparent 2 MB pages, 6 load threads)",
+   "env": {},
+   "extra_args": {},
+   "decode_tok_s": [
+    25.73,
+    26.53
+   ],
+   "decode_median": 26.13,
+   "prompt_tok_s": [
+    32.4,
+    195.9
+   ],
+   "startup_facts": [
+    "strata generate: PCIe probe failed -> pcie_frac default 0.55",
+    "strata generate: expert arena: cudaHostRegister PORTABLE ok; MAP_HUGETLB unavailable (no hugetlb pool configured?); using 4 KB pages",
+    "strata generate: loaded 75.00 GiB at 2.50 GiB/s",
+    "strata generate: expert cache 418 slots, 1.28 GiB of VRAM; policy is",
+    "strata generate: pre-filled 418 of 418 slots from the profile; slot 0 verified",
+    "strata generate: 15 expert-pool workers + the host thread",
+    "strata generate: PCIe probe: 25.4 GB/s host->device -> pcie_frac 0.55 (default 0.55)",
+    "strata generate: expert arena: cudaHostRegister PORTABLE ok; MAP_HUGETLB unavailable (no hugetlb pool configured?); using 4 KB pages",
+    "strata generate: loaded 75.00 GiB at 2.51 GiB/s",
+    "strata generate: expert cache 418 slots, 1.28 GiB of VRAM; policy is",
+    "strata generate: pre-filled 418 of 418 slots from the profile; slot 0 verified",
+    "strata generate: 15 expert-pool workers + the host thread"
+   ]
+  },
+  {
+   "arm": "4kb",
+   "why": "the arena on 4 KB pages (the old fallback)",
+   "env": {
+    "STRATA_NO_LARGEPAGES": "1"
+   },
+   "extra_args": {},
+   "decode_tok_s": [
+    26.05,
+    26.98
+   ],
+   "decode_median": 26.51,
+   "prompt_tok_s": [
+    32.4,
+    204.4
+   ],
+   "startup_facts": [
+    "strata generate: PCIe probe: 25.3 GB/s host->device -> pcie_frac 0.55 (default 0.55)",
+    "strata generate: expert arena: cudaHostRegister PORTABLE ok; MAP_HUGETLB unavailable (no hugetlb pool configured?); using 4 KB pages",
+    "strata generate: loaded 75.00 GiB at 2.46 GiB/s",
+    "strata generate: expert cache 418 slots, 1.28 GiB of VRAM; policy is",
+    "strata generate: pre-filled 418 of 418 slots from the profile; slot 0 verified",
+    "strata generate: 15 expert-pool workers + the host thread"
+   ]
+  }
+ ]
+}

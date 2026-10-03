@@ -206,6 +206,35 @@ void* reserve(uint64_t bytes, PageBacking& got, std::string& note, const std::st
         note = "hugetlb 2 MB pages";
         return p;
     }
+    // A reserved hugepage pool is not the only 2 MB source: with transparent hugepages set to `always`
+    // (this machine's default), an anonymous MAP_ANONYMOUS mapping is THP-backed on its own and the arena gets
+    // 2 MB pages without a pool.  The mapping is rounded up to 2 MB and aligned to 2 MB (the slack, under
+    // 2 MB, is trimmed off and stays unused, as on the Windows path) and madvised to MADV_HUGEPAGE, so the
+    // kernel cannot silently fall back to 4 KB pages; the backing is still reported, not assumed.
+    if (std::getenv("STRATA_NO_LARGEPAGES") == nullptr) {
+        constexpr uint64_t kHuge = 2ull << 20;
+        // one huge page of slack before rounding up: an unaligned start needs `head` extra bytes on top of
+        // `bytes`, and `bytes` may already be a multiple of the page size
+        const uint64_t map_bytes = (bytes + kHuge + kHuge - 1) / kHuge * kHuge;
+        p = mmap(nullptr, (size_t) map_bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (p != MAP_FAILED) {
+            const uintptr_t raw = (uintptr_t) p;
+            const uintptr_t aligned = (raw + kHuge - 1) / kHuge * kHuge;
+            const size_t head = (size_t) (aligned - raw), tail = (size_t) (map_bytes - bytes - head);
+            if (head != 0)
+                munmap((void*) raw, head);                                   // the head slack
+            if (tail != 0)
+                munmap((void*) (aligned + bytes), tail);                     // the tail slack
+            uint8_t* const arena = (uint8_t*) aligned;
+            if (madvise(arena, (size_t) bytes, MADV_HUGEPAGE) == 0) {
+                got = PageBacking::LargePages;
+                note = "transparent 2 MB pages (MADV_HUGEPAGE; no hugepage pool)";
+                return arena;
+            }
+            munmap((void*) aligned, (size_t) bytes);   // the whole mapping, both slacks already trimmed
+            p = MAP_FAILED;
+        }
+    }
     note = "MAP_HUGETLB unavailable (no hugetlb pool configured?); using 4 KB pages";
     p = mmap(nullptr, bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     got = PageBacking::NormalPages;

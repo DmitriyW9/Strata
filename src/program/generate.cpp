@@ -985,6 +985,15 @@ double probe_pcie_h2d_gbps() {
     return bw;
 }
 
+// The expert arena's load threads (the pack's cold read + fill).  The default is the 6 the 7600/5070 PC was
+// measured with; STRATA_ARENA_THREADS changes it on a machine with more cores, where the same 75 GiB read is
+// queue-depth limited rather than core limited (the same lever as STRATA_FETCH_THREADS on the mmap path).
+int arena_threads() {
+    if (const char* v = std::getenv("STRATA_ARENA_THREADS"); v != nullptr && std::atoi(v) > 0)
+        return std::atoi(v);
+    return 6;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -2624,7 +2633,7 @@ int main(int argc, char** argv) {
         else if (pin_wddm_cap)
             std::fprintf(stderr, "strata generate: multi-GPU under WDDM: at most 8 GiB of the expert arena is pinned "
                                  "(STRATA_ARENA_PIN_GIB changes it)\n");
-        if (!arena_src.open(o.pack, g.n_layers, g.n_expert, /*threads=*/6, err, pin_limit,
+        if (!arena_src.open(o.pack, g.n_layers, g.n_expert, arena_threads(), err, pin_limit,
                             o.shared_expert_arena)) {
             std::fprintf(stderr, "strata generate: %s\n", err.c_str());
             return 1;
