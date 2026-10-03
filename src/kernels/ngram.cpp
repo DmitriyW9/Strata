@@ -209,6 +209,9 @@ bool PleTable::open(const std::string& gguf_path, std::string& err, const PleIoO
         close();
         return false;
     }
+    // PleReader's row_bytes has been a runtime parameter since the FP8 table (160 B rows) needed it; Q5_0's
+    // 110 B rows go through the exact same generic path (ple_reader_test --selftest covers both 90 and 110 B
+    // rows: straddling, caching, in-flight tickets, keep-alive). This refusal was stale.
     impl_->n_rows = t->shape[1];
     impl_->data = impl_->file->tensor_data(*t);
 
