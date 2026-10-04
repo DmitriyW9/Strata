@@ -6,8 +6,8 @@
 //     with 64-bit multiply/xor and no tensor op at all.  `qwen4exp.cpp` L1092-1124, where the source says
 //     outright that it is host-side because "ggml has no int64 and no xor".
 //   * `PleTable`  - the row gather. `per_layer_token_embd.weight` is not in the pack: it stays in its model GGUF
-//     shard and is read on demand. The original release stores it as IQ4_NL; the Uncensored release stores it as
-//     Q5_0.
+//     shard and is read on demand. The original release stores it as IQ4_NL; Uncensored Q4_K_M uses Q5_0 and
+//     Q5_K_M uses Q5_1.
 //
 // THE HASH IS THE ONE PLACE IN THIS MODEL WHERE A WRONG BIT IS SILENTLY PLAUSIBLE.  Every one of its
 // properties has a rival reading that produces a valid index in range:
@@ -42,10 +42,11 @@ inline constexpr int32_t TOKEN_NULL = -1;       // LLAMA_TOKEN_NULL
 inline constexpr float NG_RMS_EPS = 1e-6f;
 
 // The table is [160, 320001536]. ne0 = 160 is the FAST axis, so one row is 5 quant blocks.
-// IQ4_NL uses 90 bytes, Q5_0 uses 110 bytes, and the packed FP8 E4M3 table uses 160 bytes per row.
+// IQ4_NL uses 90 bytes, Q5_0 uses 110, Q5_1 uses 120, and packed FP8 E4M3 uses 160 bytes per row.
 inline constexpr uint64_t PLE_TABLE_ROWS = 320001536ull;
 inline constexpr int PLE_ROW_BYTES = (PLE_HEAD_DIM / 32) * 18;           // IQ4_NL: 90
 inline constexpr int PLE_Q5_0_ROW_BYTES = (PLE_HEAD_DIM / 32) * 22;      // Q5_0: 110
+inline constexpr int PLE_Q5_1_ROW_BYTES = (PLE_HEAD_DIM / 32) * 24;      // Q5_1: 120
 inline constexpr int PLE_ROW_BYTES_FP8 = PLE_HEAD_DIM;                   // 160: an F8_E4M3 row, one byte a value
 inline constexpr int PLE_ROW_BYTES_MAX = PLE_ROW_BYTES_FP8;
 inline constexpr int PLE_MAX_ROW_BYTES = PLE_ROW_BYTES_MAX;

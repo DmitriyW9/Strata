@@ -6,11 +6,14 @@ The target is `orcarouter/Qwen3.8-Flash-Next-Uncensored-GGUF`, **IQ3_XXS** (two 
 It has Strata's Qwen4Exp geometry, but ordinary quantization also compresses the hyperconnection,
 small attention and PLE projections which Strata's kernels read as BF16.
 
-The repository's setup menu separately supports the author's **Q4_K_M** release (three shards, about 119 GB).
-Setup recognizes those shards in `~/projects/ai/LLM/models`, prepares the model automatically and builds the
-current CUDA engine from source. Q4_K_M uses Q4_K gate/up experts and Q8_0 down experts, so this is not an
-IQ-format model; it requires an NVIDIA CUDA backend and about 92 GB of system RAM. The IQ3_XXS instructions
-below remain a manual workflow.
+The repository's setup menu separately supports the author's **Q4_K_M** and **Q5_K_M** releases (three shards,
+about 119 GB and 134 GB). Setup recognizes those shards in `~/projects/ai/LLM/models`, prepares the model
+automatically and builds the current CUDA engine from source. Q4_K_M uses Q4_K gate/up and Q8_0 down experts;
+Q5_K_M uses Q5_K, Q5_1 and Q8_0 experts, and its PLE table is Q5_1. These are plain K-quants, not IQ-format
+models; they require an NVIDIA CUDA backend. Q4_K_M needs about 92 GB of system RAM, and Q5_K_M needs about
+104 GB including room for the OS and the engine. On a PC with less RAM, setup uses its low-RAM mode, which needs
+about 101 GB of free disk space for the Q5_K_M expert file and preparation overhead. The IQ3_XXS instructions below
+remain a manual workflow.
 
 `tools/iq_pack.py --compat-bf16` expands only those projections, rounding to BF16 using nearest-even.
 This adds rounding relative to the GGUF's dequantized weights; it does not recover the original BF16
@@ -88,7 +91,7 @@ does not establish this fine-tune's speed or accuracy.
 ## Scope and validation
 
 - IQ3_XXS is the target of this manual workflow; it is not an installer menu option.
-- Q4_K_M is handled by the setup menu and uses its own source-built CUDA kernels.
+- Q4_K_M and Q5_K_M are handled by the setup menu and use the source-built CUDA kernels.
 - IQ3_M additionally uses Q5_0 expert down matrices, which the native GPU expert path does not support.
 - The installer model menu is unchanged. This is an explicit local packing workflow.
 - Focused conversion and split-file tests: `.venv/bin/python -m unittest discover -s tools -p test_iq_pack.py`.

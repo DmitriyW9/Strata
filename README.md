@@ -89,8 +89,10 @@ lower the RAM needed.
 Not sure? Take **IQ2_XS** - or the **Coder** if you mainly write code, or have 32-48 GB of RAM. You can add another
 one later with `SETUP.bat` (the same as `START-HERE.bat --setup`; on Linux `./setup.sh --setup`).
 
-The setup menu also offers **OrcaRouter's Flash-Next Uncensored Q4_K_M**. It downloads about **119 GB** and needs
-about **92 GB of RAM**; setup finds its three shards in `~/projects/ai/LLM/models` or accepts `--gguf-dir`.
+The setup menu also offers **OrcaRouter's Flash-Next Uncensored Q4_K_M and Q5_K_M**. Q4_K_M downloads about
+**119 GB** and needs about **92 GB of RAM**; Q5_K_M downloads about **134 GB** and needs about **104 GB of RAM**.
+Setup finds their three shards in `~/projects/ai/LLM/models` or accepts `--gguf-dir`. On a PC short of RAM, setup
+needs additional disk space to prepare the low-RAM expert file.
 The [manual IQ3_XXS compatibility setup](docs/ORCA.md) remains available separately.
 
 **Unsloth's UD-IQ4_XS** is a regular choice; **UD-Q4_K_XL** remains experimental. UD-Q4_K_XL is the closest

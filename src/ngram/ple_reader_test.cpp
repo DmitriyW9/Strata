@@ -75,9 +75,8 @@ bool check_rows(ng::PleReader& rd, const std::vector<uint32_t>& rows, uint32_t n
     return true;
 }
 
-// row_bytes: ng::ROW_BYTES (90, IQ4_NL) is the production default; 110 (#296, OrcaRouter's Q5_0 PLE rows) is
-// run too, through the exact same generic row_bytes path -- nothing here is IQ4_NL-specific, so a second row
-// size run here is the correctness evidence for lifting ngram.cpp's "Q5_0 PLE requires --ple-io mmap" refusal.
+// row_bytes: ng::ROW_BYTES (90, IQ4_NL) is the production default; Q5_0 (110 B) and Q5_1 (120 B) PLE rows run too,
+// through the same generic row_bytes path.
 int selftest(const std::string& dir, uint32_t rb) {
     const uint32_t N = 500000;                          // 45 MB: large enough for thousands of distinct pages
     const std::string path = dir + "/ple_reader_selftest_" + std::to_string(rb) + ".bin";
@@ -191,27 +190,26 @@ int selftest(const std::string& dir, uint32_t rb) {
         CHECK(rd.snapshot().keepalive_reads == 0, "keep-alive without the worker thread");
     }
     std::filesystem::remove(path);
-    {
-        constexpr uint32_t Q5_ROW_BYTES = k::PLE_Q5_0_ROW_BYTES;
+    for (const uint32_t q5_row_bytes : {k::PLE_Q5_0_ROW_BYTES, k::PLE_Q5_1_ROW_BYTES}) {
         constexpr uint32_t Q5_ROWS = 5000;
-        const std::string q5_path = dir + "/ple_reader_q5_selftest.bin";
-        if (!make_table(q5_path, Q5_ROWS, Q5_ROW_BYTES)) {
+        const std::string q5_path = dir + "/ple_reader_q5_selftest_" + std::to_string(q5_row_bytes) + ".bin";
+        if (!make_table(q5_path, Q5_ROWS, q5_row_bytes)) {
             std::fprintf(stderr, "cannot write %s\n", q5_path.c_str());
             return 2;
         }
         ng::PleReader rd;
         std::string err;
-        CHECK(rd.open(q5_path, HEADER, Q5_ROWS, 16, 256, err, true, Q5_ROW_BYTES), "Q5_0 row-size open: %s",
+        CHECK(rd.open(q5_path, HEADER, Q5_ROWS, 16, 256, err, true, q5_row_bytes), "Q5 row-size open: %s",
               err.c_str());
         std::vector<uint32_t> rows{0, 1, 17, 102, Q5_ROWS - 1, Q5_ROWS, 0xFFFFFFFFu};
-        check_rows(rd, rows, Q5_ROWS, Q5_ROW_BYTES, "Q5_0 row-size");
+        check_rows(rd, rows, Q5_ROWS, q5_row_bytes, "Q5 row-size");
         std::vector<uint32_t> straddles;
         for (uint32_t r = 0; r < Q5_ROWS && straddles.size() < 32; ++r) {
-            const uint64_t at = HEADER + (uint64_t) r * Q5_ROW_BYTES;
-            if (at / ng::PAGE != (at + Q5_ROW_BYTES - 1) / ng::PAGE) straddles.push_back(r);
+            const uint64_t at = HEADER + (uint64_t) r * q5_row_bytes;
+            if (at / ng::PAGE != (at + q5_row_bytes - 1) / ng::PAGE) straddles.push_back(r);
         }
-        check_rows(rd, straddles, Q5_ROWS, Q5_ROW_BYTES, "Q5_0 straddles");
-        CHECK(rd.cache_size() <= rd.cache_capacity(), "Q5_0 row cache exceeded its bound");
+        check_rows(rd, straddles, Q5_ROWS, q5_row_bytes, "Q5 straddles");
+        CHECK(rd.cache_size() <= rd.cache_capacity(), "Q5 row cache exceeded its bound");
         rd.close();
         std::filesystem::remove(q5_path);
     }
@@ -310,8 +308,7 @@ int main(int argc, char** argv) {
         else { std::fprintf(stderr, "usage: ple_reader_test --selftest [--dir D] | --gguf SHARD2 [--rows N] [--tokens F]\n"); return 2; }
     }
     if (self) {
-        // ng::ROW_BYTES (90, IQ4_NL, production default) and 110 (#296, OrcaRouter's Q5_0 PLE rows) through the
-        // same generic row_bytes path -- see the comment on selftest().
+        // IQ4_NL (90 B), OrcaRouter Q5_0 (110 B), and Q5_1 (120 B) through the generic row_bytes path.
         const int r90 = selftest(dir, ng::ROW_BYTES);
         const int r110 = selftest(dir, 110);
         return r90 != 0 ? r90 : r110;

@@ -80,8 +80,10 @@ class GgufDirShards(unittest.TestCase):
         self.assertEqual(self.shards(names[:1], model="Q4_K_XL"), names)   # the others named from the first
 
     def test_three_uncensored_shards(self):
-        names = ["Qwen3.8-Flash-Next-Uncensored-Q4_K_M-%05d-of-00003.gguf" % i for i in range(1, 4)]
-        self.assertEqual(self.shards(names, family="uncensored", model="Q4_K_M"), names)
+        for model in ("Q4_K_M", "Q5_K_M"):
+            names = [f"Qwen3.8-Flash-Next-Uncensored-{model}-{i:05d}-of-00003.gguf" for i in range(1, 4)]
+            with self.subTest(model=model):
+                self.assertEqual(self.shards(names, family="uncensored", model=model), names)
 
     def test_another_split_of_a_setup_size(self):
         names = ["my-IQ3_XXS-%05d-of-00003.gguf" % i for i in range(1, 4)]
@@ -116,6 +118,8 @@ class GgufDirUnsupported(unittest.TestCase):
                            ("Qwen3.8-Flash-Next-UD-Q2_K_XL-00001-of-00003.gguf", "UD-Q2_K_XL"),
                            ("model-Q4_K_M.gguf", "Q4_K_M"),
                            ("Qwen3.8-Flash-Next-Uncensored-Q4_K_M-00001-of-00003.gguf", None),
+                           ("Qwen3.8-Flash-Next-Uncensored-Q5_K_M-00001-of-00003.gguf", None),
+                           ("model-Q5_K_M.gguf", "Q5_K_M"),
                            ("Qwen3.8-Flash-Next-GSQ-RCO-IQ3_XXS-00001-of-00002.gguf", None),
                            ("Qwen3.8-Flash-Next-UD-Q4_K_XL-00001-of-00004.gguf", None),
                            ("my-IQ3_XXS-00001-of-00003.gguf", None), ("mmproj-F16.gguf", None),

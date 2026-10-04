@@ -1,4 +1,4 @@
-// Real-artifact Q5_0 PLE rows against ggml's reference dequantizer.
+// Real-artifact Q5_0 and Q5_1 PLE rows against ggml's reference dequantizer.
 #define NOMINMAX
 #include "strata/artifact/gguf_reader.hpp"
 #include "strata/kernels/ngram.hpp"
@@ -17,11 +17,15 @@ int main(int argc, char** argv) {
     }
     strata::GgufFile gguf(argv[1]);
     const auto* tensor = gguf.find("per_layer_token_embd.weight");
-    if (!tensor || tensor->type != 6 || tensor->shape.size() != 2 || tensor->shape[0] != 160) {
-        std::fprintf(stderr, "expected Q5_0 PLE [160, N]\n");
+    if (!tensor || (tensor->type != 6 && tensor->type != 7) || tensor->shape.size() != 2 ||
+        tensor->shape[0] != 160) {
+        std::fprintf(stderr, "expected Q5_0 or Q5_1 PLE [160, N]\n");
         return 2;
     }
-    const auto* traits = ggml_get_type_traits(GGML_TYPE_Q5_0);
+    const auto type = tensor->type == 7 ? GGML_TYPE_Q5_1 : GGML_TYPE_Q5_0;
+    const size_t row_bytes = tensor->type == 7 ? 120 : 110;
+    const char* type_name = tensor->type == 7 ? "Q5_1" : "Q5_0";
+    const auto* traits = ggml_get_type_traits(type);
     const uint8_t* bytes = gguf.tensor_data(*tensor);
     const uint32_t probes[] = {0, 1, 12345, 20000003, (uint32_t) (tensor->shape[1] - 1)};
     bool pass = true;
@@ -38,7 +42,7 @@ int main(int argc, char** argv) {
         for (uint32_t row : probes) {
             float got[160], want[160];
             table.read_row(row, got);
-            traits->to_float(bytes + (size_t) row * 110, want, 160);
+            traits->to_float(bytes + (size_t) row * row_bytes, want, 160);
             for (int i = 0; i < 160; ++i)
                 max_abs = std::max(max_abs, (double) std::fabs(got[i] - want[i]));
         }
@@ -52,12 +56,12 @@ int main(int argc, char** argv) {
         }
         for (int h = 0; h < 16; ++h) {
             float want[160];
-            traits->to_float(bytes + (size_t) rows[h] * 110, want, 160);
+            traits->to_float(bytes + (size_t) rows[h] * row_bytes, want, 160);
             for (int i = 0; i < 160; ++i)
                 max_abs = std::max(max_abs, (double) std::fabs(batch[h * 160 + i] - want[i]));
         }
         const bool mode_pass = max_abs <= 1e-6;
-        std::printf("Q5_0 PLE %s: %zu rows, max_abs %.3e %s\n",
+        std::printf("%s PLE %s: %zu rows, max_abs %.3e %s\n", type_name,
                     mode == strata::kernels::PleIo::Direct ? "Direct" : "Mmap",
                     (size_t) table.rows(), max_abs, mode_pass ? "PASS" : "FAIL");
         pass = pass && mode_pass;

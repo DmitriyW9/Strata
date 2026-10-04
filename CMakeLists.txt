@@ -1170,7 +1170,7 @@ if(STRATA_NATIVE_EXPERTS)
       set_tests_properties(native_expert_parity_refuses_q6_K PROPERTIES WILL_FAIL TRUE)
     endif()
   endif()
-  # #296's real-weight checks (OrcaRouter Q4_K_S files; docs/ORCA_Q4_K_S.md) - test programs, not part of a release
+  # Real-weight quantized PLE row checks against ggml's reference dequantizer - test programs, not part of a release
   if(STRATA_ENABLE_CUDA AND STRATA_BUILD_TESTS)
     add_executable(ple_q5_parity src/kernels/ple_q5_parity.cpp)
     target_link_libraries(ple_q5_parity PRIVATE strata_kernels strata_artifact ggml-base ${_strata_gpu_runtime_target})
