@@ -24,6 +24,10 @@ void dequant_f16(int ggml_type, const void* blocks, int64_t row0, int64_t rows, 
 /// Gate/up matrices into interleaved FP16 rows (gate row 0, up row 0, gate row 1, up row 1, ...).
 void dequant_gu_f16(int ggml_type, const void* gate, const void* up, int64_t n_ff, int64_t n_embd, uint16_t* out,
                     void* stream);
+/// dequant_f16 with output row stride `ld` >= cols (a multiple of 8): S23's padded weight scratch.  False (nothing
+/// launched) for the i-quant formats and unsupported shapes.
+bool dequant_f16_ld(int ggml_type, const void* blocks, int64_t row0, int64_t rows, int64_t cols, int64_t ld,
+                    uint16_t* out, void* stream);
 
 /// The same into FP32 (tests and small tensors).
 void dequant_f32(int ggml_type, const void* blocks, int64_t row0, int64_t rows, int64_t cols, float* out, void* stream);

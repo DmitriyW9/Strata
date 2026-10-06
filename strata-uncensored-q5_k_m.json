@@ -17,8 +17,6 @@
   "4",
   "--spec-min-p",
   "0.5",
-  "--reasoning_effort",
-  "low",
   "--temperature",
   "0.7",
   "--mtp",
