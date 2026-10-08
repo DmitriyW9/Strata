@@ -1107,7 +1107,7 @@ def gpu_info(pick=None):
 def find_nvcc(below=None):
     """The newest CUDA toolkit's nvcc and its (major, minor); with `below`, the newest older than that version.
     #601: STRATA_NVCC=<path to nvcc> is the only one considered (a newer toolkit beside it that cannot build on this
-    PC - CUDA 12.9 with glibc 2.43 - is not taken instead)."""
+    PC is not taken instead)."""
     pick = os.environ.get("STRATA_NVCC")
     if pick:
         if not Path(pick).exists():
@@ -2612,6 +2612,10 @@ def cmake_build(src, bdir, target, defs, vcvars, bat_name):
         fail("cmake / ninja not found after installing them", "run: .venv python -m pip install cmake ninja")
     conf = [cmake, "-G", "Ninja", f"-DCMAKE_MAKE_PROGRAM={ninja}", "-S", str(src), "-B", str(bdir),
             "-DCMAKE_BUILD_TYPE=Release", *defs]
+    if os.environ.get("CXX"):
+        conf.append(f"-DCMAKE_CXX_COMPILER={os.environ['CXX']}")
+    if os.environ.get("CUDAHOSTCXX"):
+        conf.append(f"-DCMAKE_CUDA_HOST_COMPILER={os.environ['CUDAHOSTCXX']}")
     build = [cmake, "--build", str(bdir), "--target", target, "-j", str(max(2, (os.cpu_count() or 4) // 2))]
     # A failed build is tried once more: CUDA 13.0's ptxas now and then fails to parse a PTX file it just wrote, and
     # the same command then gets past it (issue #45); a second attempt only compiles what is still missing.
@@ -2661,6 +2665,21 @@ def engine_defs(archs, toolkit=13) -> list:
     return ["-DSTRATA_EXPERIMENTAL_SM60=ON"] if min(int(x) for x in archs) < 75 or int(toolkit) == 12 else []
 
 
+def cuda12_glibc_compat_flags() -> list[str]:
+    """Avoid CUDA 12's noexcept clash with glibc's C23 math declarations on Linux host compilation."""
+    if WIN:
+        return []
+    libc, version = platform.libc_ver()
+    try:
+        ver = tuple(int(x) for x in version.split(".")[:2])
+    except (AttributeError, ValueError):
+        return []
+    if libc != "glibc" or ver < (2, 41):
+        return []
+    header = ROOT / "tools" / "cuda_glibc_compat.h"
+    return [f"-DCMAKE_CUDA_FLAGS=-Xcompiler=-include,{header}"]
+
+
 def prebuilt_vision(meta: dict, gpu: dict, vision: str) -> str:
     """The image encoder to use with a ready-made engine (`meta`: its BUILD.json).  The encoder can cover fewer cards
     than the engine (0.1.30/0.1.31: no RTX 20 code, #331): such a card gets the CPU encoder - the same program - instead
@@ -2691,6 +2710,7 @@ def build_engine(gpu, vision, yes, llama, toolkit=None) -> Path:
     local = meta.get("source") == "local"
     src, vsrc = source_hash(ENGINE_SOURCES), source_hash(VISION_SOURCES)
     archs = sorted({int(x) for x in gpu.get("archs", [gpu["arch"]])})    # every card the model runs on
+    glibc_compat = cuda12_glibc_compat_flags() if t12 else []
     built = {int(x) for x in meta.get("archs", [])}
     # a card the engine has no code for (a GPU added with --gpus, #128) needs a compile even when the source is the
     # same; the compile keeps the generations it was built for
@@ -2715,14 +2735,16 @@ def build_engine(gpu, vision, yes, llama, toolkit=None) -> Path:
         cmake_build(ROOT, bdir, "strata",
                     ["-DSTRATA_ENABLE_CUDA=ON", "-DSTRATA_BUILD_TESTS=OFF", f"-DCMAKE_CUDA_ARCHITECTURES={cuda_archs}",
                      f"-DCMAKE_CUDA_COMPILER={nvcc}", f"-DSTRATA_GGML_DIR={llama}", *engine_defs(archs, toolkit),
-                     *isa_floor_defs(floor, bdir, meta)],
+                     *glibc_compat, *isa_floor_defs(floor, bdir, meta)],
                     vcvars, "build-strata-cuda12.bat" if t12 else "build-strata.bat")
         shutil.copy2(bdir / EXE, eng / EXE)
     if not vision_ok:
         say("  Compiling the image encoder" + (" with CUDA (10-20 minutes, once) ..." if vision == "gpu" else " ..."))
         defs = [f"-DLLAMA_DIR={llama}", f"-DSTRATA_VISION_CUDA={'ON' if vision == 'gpu' else 'OFF'}"]
         if vision == "gpu":
-            defs += [f"-DCMAKE_CUDA_ARCHITECTURES={cuda_archs}", f"-DCMAKE_CUDA_COMPILER={nvcc}"]
+            defs += ["-DGGML_CUDA_NCCL=OFF", f"-DCMAKE_CUDA_ARCHITECTURES={cuda_archs}",
+                     f"-DCMAKE_CUDA_COMPILER={nvcc}"]
+            defs += glibc_compat
         cmake_build(ROOT / "tools" / "vision", vdir, "strata-vision", defs, vcvars,
                     "build-vision-cuda12.bat" if t12 else "build-vision.bat")
         shutil.copy2(vdir / "bin" / VEXE, eng / VEXE)
@@ -3968,7 +3990,8 @@ def use_cuda12(cards, cfg_path: Path, cfg: dict, yes: bool) -> dict:
     warn(f"sm_{old} is older than CUDA 13 supports (it dropped Pascal and Volta): this model moves to the experimental "
          "CUDA 12 engine (docs/OLDER_GPUS.md; START-HERE.bat --setup --cuda 13 and newer cards only moves it back)")
     main = gpu_info(cards[0]["index"]) or cards[0]
-    vision = "gpu" if cfg.get("vision") else "none"
+    vision_cfg = cfg.get("vision")
+    vision = ("gpu" if vision_cfg.get("gpu") else "cpu") if isinstance(vision_cfg, dict) else "none"
     eng = get_cuda12_engine(os.environ.get("STRATA_PREBUILT_URL", PREBUILT_URL),
                             {**main, "archs": sorted({int(g["arch"]) for g in cards})}, vision, yes)
     cfg["exe"] = str(eng / EXE)

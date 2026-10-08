@@ -1,14 +1,14 @@
 {
- "exe": "/home/dmitriy/ai_models/Strata/engine/strata",
+ "exe": "/home/dmitriy/projects/ai/LLM/Strata/engine/strata",
  "args": [
   "--pack",
-  "/home/dmitriy/ai_models/Strata-data/packs/uncensored-q5_k_m",
+  "/home/dmitriy/projects/ai/LLM/Strata-data/packs/uncensored-q5_k_m",
   "--native",
   "/home/dmitriy/projects/ai/LLM/models/Qwen3.8-Flash-Next-Uncensored-Q5_K_M-00001-of-00003.gguf",
   "--ple-gguf",
   "/home/dmitriy/projects/ai/LLM/models/Qwen3.8-Flash-Next-Uncensored-Q5_K_M-00001-of-00003.gguf",
   "--expert-profile",
-  "/home/dmitriy/ai_models/Strata/data/expert-profile.bin",
+  "/home/dmitriy/projects/ai/LLM/Strata/data/expert-profile.bin",
   "--expert-cache",
   "auto",
   "--prefill",
@@ -20,7 +20,7 @@
   "--temperature",
   "0.7",
   "--mtp",
-  "/home/dmitriy/ai_models/Strata-data/mtp/rt",
+  "/home/dmitriy/projects/ai/LLM/Strata-data/mtp/rt",
   "--max-context",
   "200000",
   "--kv",
@@ -29,10 +29,10 @@
   "--vram-reserve-mib",
   "700"
  ],
- "cwd": "/home/dmitriy/ai_models/Strata",
- "tokenizer": "/home/dmitriy/ai_models/Strata-data/packs/uncensored-q5_k_m/tokenizer",
+ "cwd": "/home/dmitriy/projects/ai/LLM/Strata",
+ "tokenizer": "/home/dmitriy/projects/ai/LLM/Strata-data/packs/uncensored-q5_k_m/tokenizer",
  "model_name": "qwen3.8-flash-next-uncensored-q5_k_m",
- "log": "/home/dmitriy/ai_models/Strata/strata-uncensored-q5_k_m.log",
+ "log": "/home/dmitriy/projects/ai/LLM/Strata/strata-uncensored-q5_k_m.log",
  "lib_dirs": [
   "/opt/cuda/bin",
   "/opt/cuda/lib64"
@@ -42,7 +42,7 @@
  "gpu": 0,
  "gpus_asked": true,
  "vision": {
-  "exe": "/home/dmitriy/ai_models/Strata/engine/strata-vision",
+  "exe": "/home/dmitriy/projects/ai/LLM/Strata/engine/strata-vision",
   "mmproj": "/home/dmitriy/projects/ai/LLM/models/mmproj-Qwen3.8-Flash-Next-Uncensored-F16.gguf",
   "model": "/home/dmitriy/projects/ai/LLM/models/Qwen3.8-Flash-Next-Uncensored-Q5_K_M-00001-of-00003.gguf",
   "gpu": false,

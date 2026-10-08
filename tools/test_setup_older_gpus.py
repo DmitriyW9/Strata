@@ -154,6 +154,53 @@ class BuildTools(unittest.TestCase):
             self.tools({"arch": "70", "archs": [70, 120]}, lambda below: ("nvcc12", (12, 6)) if below else (None, None))
 
 
+class CMakeBuild(unittest.TestCase):
+    def test_cuda12_glibc_compat_is_scoped_to_affected_linux_builds(self):
+        with mock.patch.object(setup, "WIN", False), \
+                mock.patch.object(setup.platform, "libc_ver", return_value=("glibc", "2.44")):
+            flags = setup.cuda12_glibc_compat_flags()
+        self.assertEqual(flags, [f"-DCMAKE_CUDA_FLAGS=-Xcompiler=-include,{setup.ROOT / 'tools' / 'cuda_glibc_compat.h'}"])
+
+        with mock.patch.object(setup, "WIN", False), \
+                mock.patch.object(setup.platform, "libc_ver", return_value=("glibc", "2.40")):
+            self.assertEqual(setup.cuda12_glibc_compat_flags(), [])
+        with mock.patch.object(setup, "WIN", True):
+            self.assertEqual(setup.cuda12_glibc_compat_flags(), [])
+
+    def test_explicit_compilers_are_applied_to_existing_builds(self):
+        with tempfile.TemporaryDirectory() as d, \
+                mock.patch.object(setup, "find_tool", side_effect=lambda name: f"/usr/bin/{name}"), \
+                mock.patch.object(setup, "run", return_value=setup.subprocess.CompletedProcess([], 0)) as run, \
+                mock.patch.dict(os.environ, {"CXX": "/usr/bin/g++-14", "CUDAHOSTCXX": "/usr/bin/g++-14"}):
+            setup.cmake_build(Path(d), Path(d) / "build", "strata", [], None, "build.sh")
+
+        conf = run.call_args_list[0].args[0]
+        self.assertIn("-DCMAKE_CXX_COMPILER=/usr/bin/g++-14", conf)
+        self.assertIn("-DCMAKE_CUDA_HOST_COMPILER=/usr/bin/g++-14", conf)
+
+
+class CUDA12Selection(unittest.TestCase):
+    def test_existing_cpu_vision_stays_cpu_when_switching_engines(self):
+        with tempfile.TemporaryDirectory() as d:
+            eng = Path(d) / "engine-cuda12"
+            eng.mkdir()
+            calls = []
+
+            def get_engine(url_base, gpu, vision, yes):
+                calls.append(vision)
+                return eng
+
+            cfg_path = Path(d) / "config.json"
+            cfg = {"vision": {"gpu": False}}
+            with mock.patch.object(setup, "gpu_info", return_value=None), \
+                    mock.patch.object(setup, "get_cuda12_engine", side_effect=get_engine), \
+                    mock.patch.object(setup, "engine_lib_dirs", return_value=[]):
+                quiet(setup.use_cuda12, [V100], cfg_path, cfg, True)
+
+            self.assertEqual(calls, ["cpu"])
+            self.assertFalse(json.loads(cfg_path.read_text())["vision"]["gpu"])
+
+
 def fake_prebuilt(calls):
     """get_prebuilt that installs an engine in the folder of the toolkit it is asked for (and says which)."""
     def get(url_base, gpu, vision, updating=False, toolkit=13):

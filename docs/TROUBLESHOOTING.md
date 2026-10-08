@@ -41,9 +41,9 @@ Install what it names (links are printed), then run it again. Everything already
 `cospi`/`sinpi`/`rsqrt`).** Two known mismatches between the CUDA toolkit and a new Linux (#601):
 - gcc newer than 14 (Ubuntu 26.04's default 15): CUDA 12.x and 13.0 refuse it. Install g++-14 and run
   `CXX=g++-14 CUDAHOSTCXX=g++-14 ./setup.sh`.
-- glibc 2.43 with CUDA 12.9: the toolkit's math headers clash with glibc's, already in CMake's first test compile.
-  Use CUDA 12.8 or 13.x instead. Setup takes the newest toolkit it finds; `STRATA_NVCC=/usr/local/cuda-12.8/bin/nvcc
-  ./setup.sh` makes it use that one (only that one).
+- glibc 2.41 or newer with CUDA 12.x: CUDA and glibc's C23 math declarations disagree about `noexcept`, already in
+  CMake's first compiler test. Setup pre-includes a host-only compatibility header for the CUDA 12 build; CUDA kernels
+  and runtime behavior are unchanged.
 
 **The first start takes minutes.**
 It is reading 34-55 GB into RAM; the second start is faster while the files are in the OS cache. Started from Task
