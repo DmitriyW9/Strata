@@ -52,7 +52,8 @@ Install what it names (links are printed), then run it again. Everything already
 **Linux: the engine does not compile (`unsupported GNU version`, or `exception specification is incompatible` for
 `cospi`/`sinpi`/`rsqrt`).** Two known mismatches between the CUDA toolkit and a new Linux (#601):
 - gcc newer than 14 (Ubuntu 26.04's default 15): CUDA 12.x and 13.0 refuse it. Install g++-14 and run
-  `CXX=g++-14 CUDAHOSTCXX=g++-14 ./setup.sh`.
+  `CXX=g++-14 CUDAHOSTCXX=g++-14 ./setup.sh` (CC, CXX and CUDAHOSTCXX name the build's compilers; setup passes them
+  to CMake itself, so an already-configured build folder picks them up too, #1645).
 - glibc 2.41 or newer with CUDA 12.x: CUDA and glibc's C23 math declarations disagree about `noexcept`, already in
   CMake's first compiler test. Setup pre-includes a host-only compatibility header for the CUDA 12 build; CUDA kernels
   and runtime behavior are unchanged.
