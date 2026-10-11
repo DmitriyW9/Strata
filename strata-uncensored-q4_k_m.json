@@ -42,14 +42,15 @@
  "port": 8080,
  "cuda": 12,
  "gpu": [
-  0,
-  1
+  1,
+  0
  ],
  "gpus_asked": true,
  "layer_split": "auto",
+ "gpu_order": "as_given",
  "open_browser": false,
  "vision": {
-  "exe": "/home/dmitriy/\u0440\u0430\u0437\u043d\u043e\u0435/projects/ai/LLM/Strata/engine-cuda12/strata-vision",
+  "exe": "/home/dmitriy/projects/ai/LLM/Strata/engine-cuda12/strata-vision",
   "mmproj": "/home/dmitriy/projects/ai/LLM/models/mmproj-Qwen3.8-Flash-Next-Uncensored-F16.gguf",
   "model": "/home/dmitriy/projects/ai/LLM/models/Qwen3.8-Flash-Next-Uncensored-Q4_K_M-00001-of-00003.gguf",
   "gpu": false,
