@@ -36,4 +36,8 @@ void dequant_f32(int ggml_type, const void* blocks, int64_t row0, int64_t rows, 
 void dequant_embed_rows(int ggml_type, const void* table, int64_t row_bytes, const int32_t* tokens, int64_t n_tok,
                         int64_t n_embd, float* out, void* stream);
 
+/// The wide kernels (a thread per 8 values, bitwise the same output; Q4_K, Q5_K, Q6_K, IQ4_XS): 0 off, 1 on, -1 the
+/// default (STRATA_DEQUANT_WIDE, else on for compute capability 6.1).  For dequant_wide_parity.
+void dequant_set_wide(int mode);
+
 }  // namespace strata::kernels
