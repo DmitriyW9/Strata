@@ -153,6 +153,8 @@ elseif(STRATA_ENABLE_CUDA)
   if(MSVC AND STRATA_EXPERIMENTAL_SM60 AND NOT DEFINED CMAKE_CUDA_RUNTIME_LIBRARY)
     set(CMAKE_CUDA_RUNTIME_LIBRARY Shared)
   endif()
+  # CUDA 12.x supports GCC ≤ 14; allow newer host compilers (e.g. GCC 15/16) via nvcc override.
+  string(APPEND CMAKE_CUDA_FLAGS " --allow-unsupported-compiler")
   enable_language(CUDA)
   # `enable_language(CUDA)` gives the .cu compile rules but NOT the imported targets, so `CUDA::cudart` has to
   # be brought in explicitly for the host-side tests that call cudaMalloc themselves.
