@@ -191,6 +191,32 @@ __global__ void dequant_kernel(const uint8_t* __restrict__ blocks, int64_t row_b
     }
 }
 
+template <int TYPE>
+__global__ void dequant_gu_kernel(const uint8_t* __restrict__ gate, const uint8_t* __restrict__ up,
+                                  int64_t row_bytes, int64_t rows, int64_t groups_per_row, H16* __restrict__ out) {
+    const int64_t g = (int64_t) blockIdx.x * blockDim.x + threadIdx.x;
+    if (g >= rows * groups_per_row) return;
+    const int64_t r = g / groups_per_row, gi = g % groups_per_row;
+    for (int parity = 0; parity < 2; ++parity) {
+        const uint8_t* matrix = parity ? up : gate;
+        group32<TYPE>(matrix + r * row_bytes, (int) gi,
+                      out + ((2 * r + parity) * groups_per_row + gi) * 32);
+    }
+}
+
+template <int TYPE>
+__global__ void embed_rows_kernel(const uint8_t* __restrict__ table, int64_t row_bytes,
+                                  const int32_t* __restrict__ tokens, int64_t n_tok, int64_t n_embd,
+                                  float* __restrict__ out) {
+    const int64_t groups_per_row = n_embd / 32;
+    const int64_t group = (int64_t) blockIdx.x * blockDim.x + threadIdx.x;
+    if (group >= n_tok * groups_per_row) return;
+    const int64_t token = group / groups_per_row;
+    const int64_t group_in_row = group % groups_per_row;
+    const uint8_t* row = table + (int64_t) tokens[token] * row_bytes;
+    group32<TYPE>(row, (int) group_in_row, out + token * n_embd + group_in_row * 32);
+}
+
 // ---- the wide kernels: a thread per 8 values (Pascal, sm_61) --------------------------------------------------------
 // dequant_kernel's thread reads its 32-value group a byte at a time and writes 32 two-byte values one by one, 64 bytes
 // from its neighbour's.  On a Tesla P40 (sm_61) that is 7.2 ms for a 10240 x 2560 Q6_K weight (10 GB/s), and the IQ3_S
@@ -435,6 +461,40 @@ void dequant_f16(int ggml_type, const void* blocks, int64_t row0, int64_t rows, 
     launch<H16>(ggml_type, blocks, row0, rows, cols, reinterpret_cast<H16*>(out), stream);
 }
 
+void dequant_gu_f16(int type, const void* gate, const void* up, int64_t n_ff, int64_t n_embd, uint16_t* out,
+                    void* stream) {
+    int be = 0, bb = 0;
+    if (!geometry(type, be, bb) || n_embd % be != 0 || n_embd % 32 != 0 || n_ff <= 0) {
+        std::fprintf(stderr, "dequant gate/up: unsupported type %d or shape %lld x %lld\n", type, (long long) n_ff,
+                     (long long) n_embd);
+        std::exit(1);
+    }
+    const int64_t row_bytes = n_embd / be * bb, gpr = n_embd / 32, total = n_ff * gpr;
+    const unsigned grid = (unsigned) ((total + 255) / 256);
+    const uint8_t* g = (const uint8_t*) gate;
+    const uint8_t* u = (const uint8_t*) up;
+    cudaStream_t st = (cudaStream_t) stream;
+#define STRATA_DQ_GU(TY) dequant_gu_kernel<TY><<<grid, 256, 0, st>>>(g, u, row_bytes, n_ff, gpr, reinterpret_cast<H16*>(out)); break
+    switch (type) {
+    case 2: STRATA_DQ_GU(2);
+    case 6: STRATA_DQ_GU(6);
+    case 8: STRATA_DQ_GU(8);
+    case 11: STRATA_DQ_GU(11);
+    case 12: STRATA_DQ_GU(12);
+    case 13: STRATA_DQ_GU(13);
+    case 14: STRATA_DQ_GU(14);
+    case 20: STRATA_DQ_GU(20);
+    case 23: STRATA_DQ_GU(23);
+    case 42: STRATA_DQ_GU(42);
+    default:
+        std::fprintf(stderr, "dequant gate/up: unsupported type %d\n", type);
+        std::exit(1);
+    }
+#undef STRATA_DQ_GU
+    const cudaError_t e = cudaGetLastError();
+    if (e != cudaSuccess) { std::fprintf(stderr, "dequant gate/up launch: %s\n", cudaGetErrorString(e)); std::exit(1); }
+}
+
 bool dequant_f16_ld(int ggml_type, const void* blocks, int64_t row0, int64_t rows, int64_t cols, int64_t ld,
                     uint16_t* out, void* stream) {
     int be = 0, bb = 0;
@@ -451,6 +511,42 @@ void dequant_f32(int ggml_type, const void* blocks, int64_t row0, int64_t rows, 
         return;
     }
     launch<float>(ggml_type, blocks, row0, rows, cols, out, stream);
+}
+
+void dequant_embed_rows(int type, const void* table, int64_t row_bytes, const int32_t* tokens, int64_t n_tok,
+                        int64_t n_embd, float* out, void* stream) {
+    int block_elems = 0, block_bytes = 0;
+    if (!geometry(type, block_elems, block_bytes) || n_tok <= 0 || n_embd <= 0 || n_embd % block_elems != 0 ||
+        row_bytes != (n_embd / block_elems) * block_bytes) {
+        std::fprintf(stderr, "dequant embedding: unsupported type %d or shape %lld x %lld\n", type,
+                     (long long) n_tok, (long long) n_embd);
+        std::exit(1);
+    }
+    const int64_t groups = n_tok * (n_embd / 32);
+    const unsigned grid = (unsigned) ((groups + 255) / 256);
+    const uint8_t* p = (const uint8_t*) table;
+    const unsigned block = 256;
+    cudaStream_t st = (cudaStream_t) stream;
+#define STRATA_EMBED_ROWS(TY) \
+    embed_rows_kernel<TY><<<grid, block, 0, st>>>(p, row_bytes, tokens, n_tok, n_embd, out); break
+    switch (type) {
+    case 2: STRATA_EMBED_ROWS(2);
+    case 6: STRATA_EMBED_ROWS(6);
+    case 8: STRATA_EMBED_ROWS(8);
+    case 11: STRATA_EMBED_ROWS(11);
+    case 12: STRATA_EMBED_ROWS(12);
+    case 13: STRATA_EMBED_ROWS(13);
+    case 14: STRATA_EMBED_ROWS(14);
+    case 20: STRATA_EMBED_ROWS(20);
+    case 23: STRATA_EMBED_ROWS(23);
+    case 42: STRATA_EMBED_ROWS(42);
+    default:
+        std::fprintf(stderr, "dequant embedding: unsupported type %d\n", type);
+        std::exit(1);
+    }
+#undef STRATA_EMBED_ROWS
+    const cudaError_t e = cudaGetLastError();
+    if (e != cudaSuccess) { std::fprintf(stderr, "dequant embedding launch: %s\n", cudaGetErrorString(e)); std::exit(1); }
 }
 
 }  // namespace strata::kernels

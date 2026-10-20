@@ -1,4 +1,5 @@
 #include "strata/core/conversation_file.hpp"
+#include "strata/core/state_codec.hpp"
 
 #include <algorithm>
 #include <bit>
@@ -45,7 +46,9 @@ namespace strata::core {
 namespace {
 constexpr char kMagic[8] = {'S', 'T', 'R', 'S', 'E', 'S', 'S', '\x01'};
 constexpr char kEnd[8] = {'S', 'T', 'R', 'S', 'E', 'N', 'D', '\x01'};
-constexpr uint32_t kVersion = 1;
+constexpr uint32_t kVersion = 1;          // the running state is fp32 in every checkpoint
+constexpr uint32_t kVersionCoded = 2;     // a checkpoint says how its running state is stored (state_codec.hpp)
+constexpr uint32_t kVersionStages = 3;    // a file that carries stage_images (a multi-GPU split); v2's codec field too when coded
 constexpr size_t kHeader = 64, kTrailer = 16;
 
 // Progress for a transfer: one report after every block that was handed to (or read from) the OS, whatever its size
@@ -631,6 +634,7 @@ struct Out {
     SessionHasher* hash = nullptr;
     uint64_t n = 0;
     bool ok = true, overflow = false;
+    bool coded = false;   // a v2 file: every checkpoint record starts with how its running state is stored
     void count(uint64_t c) {
         if (c > UINT64_MAX - n) { overflow = true; ok = false; return; }
         n += c;
@@ -679,6 +683,9 @@ void put_kv_header(Out& o, int format, int64_t cells, int64_t heads, int64_t hea
 }
 
 void put_checkpoint(Out& o, const ConversationCheckpoint& c) {
+    // first, so a reader refuses a codec it does not know before it allocates any array. Only in a v2 file: a v1
+    // file's bytes are unchanged, which is what keeps a default save byte-identical to the last release.
+    if (o.coded) o.u64(c.state_codec);
     o.vec(c.ids);
     o.u64(c.imgs.size());
     for (const auto& k : c.imgs) { o.i64(k.start); o.u64(k.hash); }
@@ -686,7 +693,9 @@ void put_checkpoint(Out& o, const ConversationCheckpoint& c) {
     o.u64(c.used);
 }
 
-void put_payload(Out& o, const SavedConversation& s, const std::vector<SessionKvSource>* sources = nullptr) {
+// One stage block: geometry, layer range, cvec, the live state, the checkpoint chain, and the K/V.  `sources`
+// supplies this stage's K/V as streamed sources; when null the K/V is taken from s.kv (the captured image).
+void put_stage(Out& o, const SavedConversation& s, const std::vector<SessionKvSource>* sources = nullptr) {
     for (int64_t g : s.geometry) o.i64(g);
     o.i64(s.layer_lo); o.i64(s.layer_hi); o.u64(s.cvec ? 1 : 0);
     put_checkpoint(o, s.live);
@@ -707,6 +716,18 @@ void put_payload(Out& o, const SavedConversation& s, const std::vector<SessionKv
     }
 }
 
+// The whole payload: stage 0, then - only when a split is present - the count of later stages and each stage block.
+// `kv_stages` (optional) supplies the K/V per stage: kv_stages[0] for stage 0, kv_stages[k+1] for stage_images[k].
+// With no stage_images this is byte-for-byte the format-v1 payload.
+void put_payload(Out& o, const SavedConversation& s,
+                 const std::vector<std::vector<SessionKvSource>>* kv_stages = nullptr) {
+    put_stage(o, s, kv_stages ? &(*kv_stages)[0] : nullptr);
+    if (s.stage_images.empty()) return;
+    o.u64(s.stage_images.size());
+    for (size_t k = 0; k < s.stage_images.size(); ++k)
+        put_stage(o, s.stage_images[k], kv_stages ? &(*kv_stages)[k + 1] : nullptr);
+}
+
 // ---- parsing: every count is checked against the bytes left and the caller's limits before anything is allocated
 struct In {
     FileSource* f;
@@ -716,6 +737,11 @@ struct In {
     const SessionReadLimits& limits;
     SessionError kind = SessionError::invalid;
     size_t kv_layer = 0;
+    bool coded = false;   // read from the header: a v1 file has no per-checkpoint codec field
+    // active stage's running-state and per-K/V-layer bounds; null means stage 0's (the top-level limits).  A later
+    // stage sets these to its SessionStageLimits before reading its block.
+    const std::array<uint64_t, 5>* state_bytes = nullptr;
+    const std::vector<std::array<uint64_t, 5>>* kv_bytes = nullptr;
     bool fail(const std::string& m) { if (error.empty()) error = "session file: " + m; return false; }
     bool raw(void* p, size_t c) {
         if (c > left) return fail("payload ends early");
@@ -743,7 +769,8 @@ struct In {
     }
     bool buffer(ConversationBuffer& b, size_t part) {
         uint64_t n = 0;
-        const uint64_t limit = kv_layer < limits.max_kv_bytes.size() ? limits.max_kv_bytes[kv_layer][part] : UINT64_MAX;
+        const auto& kvb = kv_bytes ? *kv_bytes : limits.max_kv_bytes;
+        const uint64_t limit = kv_layer < kvb.size() ? kvb[kv_layer][part] : UINT64_MAX;
         if (!count(n, 1, limit)) return false;
         b = {};
         b.resize((size_t) n);
@@ -752,35 +779,46 @@ struct In {
 };
 
 bool get_checkpoint(In& in, ConversationCheckpoint& c) {
+    if (in.coded) {   // v2: the coding of this checkpoint's running state, read before anything is allocated
+        uint64_t code = 0;
+        if (!in.u64(code)) return false;
+        StateCodec codec = StateCodec::Fp32;
+        if (!state_codec_by_code(code, codec))
+            return in.fail("stored with a running-state codec this build cannot read (" + std::to_string(code) + ")");
+        c.state_codec = (uint8_t) code;
+    }
     if (!in.vec(c.ids, in.limits.max_tokens)) return false;
     uint64_t n = 0;
     if (!in.count(n, 16, in.limits.max_tokens)) return false;
     c.imgs.resize((size_t) n);
     for (auto& k : c.imgs) if (!in.i64(k.start) || !in.u64(k.hash)) return false;
-    const auto& m = in.limits.max_state_bytes;   // byte arrays: element and byte counts are the same
+    const auto& m = in.state_bytes ? *in.state_bytes : in.limits.max_state_bytes;   // byte arrays: element and byte counts are the same
     return in.vec(c.gdn, m[0]) && in.vec(c.ple, m[1]) && in.vec(c.tails, m[2]) && in.vec(c.dead, m[3]) &&
            in.vec(c.block_pos, m[4]) && in.u64(c.used);
 }
 
-bool get_payload(In& in, SavedConversation& s) {
+// Reads one stage block.  The caller has set in.state_bytes / in.kv_bytes to this stage's bounds (null = stage 0's
+// top-level limits).  `want_range` (if non-null) is this stage's expected [lo, hi); `kv_layers` bounds its K/V count.
+bool get_stage(In& in, SavedConversation& s, const std::pair<int64_t, int64_t>* want_range, uint64_t kv_layers) {
     for (auto& g : s.geometry) if (!in.i64(g)) return false;
     // checked before any state array is read: a file of another geometry allocates nothing
     if (in.limits.geometry && *in.limits.geometry != s.geometry)
         return in.fail("saved with another model geometry than this runtime's");
     uint64_t cvec = 0;
     if (!in.i64(s.layer_lo) || !in.i64(s.layer_hi) || !in.u64(cvec)) return false;
-    if (in.limits.layer_range &&
-        (in.limits.layer_range->first != s.layer_lo || in.limits.layer_range->second != s.layer_hi))
+    if (want_range && (want_range->first != s.layer_lo || want_range->second != s.layer_hi))
         return in.fail("saved with another layer range than this runtime's");
     if (cvec > 1) return in.fail("invalid cvec flag");
     s.cvec = cvec == 1;
     if (!get_checkpoint(in, s.live)) return false;
     uint64_t n = 0;
-    // a checkpoint is at least 8 counts + used = 72 bytes; a K/V layer at least 7 + 5 = 96
+    // a checkpoint carrying the conversation's ids and at least one image is at least 72 bytes (the same bound the
+    // checkpoint count guard below uses); a K/V layer at least 7 + 5 = 96.  An empty checkpoint is 64, but a saved
+    // stage always carries the conversation's ids, so 72 is the bound that holds for every file the writer produces.
     if (!in.count(n, 72, in.limits.max_checkpoints)) return false;
     s.checkpoints.resize((size_t) n);
     for (auto& c : s.checkpoints) if (!get_checkpoint(in, c)) return false;
-    if (!in.count(n, 96, in.limits.max_kv_layers)) return false;
+    if (!in.count(n, 96, kv_layers)) return false;
     s.kv.resize((size_t) n);
     for (auto& k : s.kv) {
         in.kv_layer = (size_t) (&k - s.kv.data());
@@ -795,18 +833,50 @@ bool get_payload(In& in, SavedConversation& s) {
     return true;
 }
 
+bool get_payload(In& in, SavedConversation& s, uint32_t version) {
+    // stage 0 is bounded by the top-level limits
+    const auto* want0 = in.limits.layer_range ? &*in.limits.layer_range : nullptr;
+    if (!get_stage(in, s, want0, in.limits.max_kv_layers)) return false;
+    if (version < kVersionStages) return true;   // format v1: no stage section, stage_images stays empty
+    uint64_t n = 0;
+    // a stage block is at least 18*8 geometry + 3*8 range/cvec + a live checkpoint (>=72, as in get_stage: a saved
+    // stage carries the conversation's ids and an image) + 8 empty checkpoint list + 8 empty K/V list = 256 bytes
+    if (!in.count(n, 256, in.limits.max_stages)) return false;
+    s.stage_images.resize((size_t) n);
+    for (size_t k = 0; k < (size_t) n; ++k) {
+        const bool bounded = k < in.limits.stage_limits.size();
+        const SessionReadLimits::SessionStageLimits* sl = bounded ? &in.limits.stage_limits[k] : nullptr;
+        in.state_bytes = sl ? &sl->max_state_bytes : nullptr;
+        in.kv_bytes = sl ? &sl->max_kv_bytes : nullptr;
+        const uint64_t kv_layers = sl ? sl->max_kv_bytes.size() : UINT64_MAX;
+        if (!get_stage(in, s.stage_images[k], sl ? &sl->layer_range : nullptr, kv_layers)) return false;
+    }
+    return true;
+}
+
 bool has_stage_parts(const SavedConversation& s) {
     if (!s.live.stage_parts.empty()) return true;
     for (const auto& c : s.checkpoints) if (!c.stage_parts.empty()) return true;
     return false;
 }
 
-// header v1, little-endian: magic[8] version:u32 header_size:u32 model:u64 config:u64 payload:u64 reserved:u64[2]
+// A file is written as v2 only when some checkpoint of this image actually holds coded bytes: a default save stays
+// a v1 file, byte for byte the same as the last release wrote.
+bool any_coded(const SavedConversation& s) {
+    if (s.live.state_codec != 0) return true;
+    for (const auto& c : s.checkpoints) if (c.state_codec != 0) return true;
+    return false;
+}
+
+// header v1 and v2, little-endian: magic[8] version:u32 header_size:u32 model:u64 config:u64 payload:u64 reserved:u64[2]
 // header_hash:u64 (session_hash64 of bytes 0..55, seed 0)
-void header_bytes(uint8_t* h, const SessionFileIdentity& id, uint64_t payload) {
+// v2 adds one u64 at the front of every checkpoint record: how that checkpoint's running state is stored. A v1 file
+// has none and is fp32 throughout, which is what it has always been.  v3 adds the stage_images section (a multi-GPU
+// split); its records carry the v2 codec field too when the state is coded.
+void header_bytes(uint8_t* h, const SessionFileIdentity& id, uint64_t payload, uint32_t version) {
     std::memset(h, 0, kHeader);
     std::memcpy(h, kMagic, 8);
-    const uint32_t version = kVersion, size = kHeader;
+    const uint32_t size = kHeader;
     std::memcpy(h + 8, &version, 4);
     std::memcpy(h + 12, &size, 4);
     std::memcpy(h + 16, &id.model, 8);
@@ -1014,6 +1084,27 @@ uint64_t session_read_max_file_bytes(const SessionReadLimits& l) {
         n = sat_add(n, 7 * 8);
         for (uint64_t b : l.max_kv_bytes[(size_t) i]) n = sat_add(n, sat_add(8, b));
     }
+    // The stage section (format v3) is bounded only when the caller bounds it: max_stages closed and a complete,
+    // closed SessionStageLimits for each stage.  Without them the bound covers a v1 file only; a v3 file read under
+    // such limits is refused by the size check (fail closed) - the engine supplies stage_limits for a multi-GPU read.
+    if (l.max_stages != open && l.stage_limits.size() >= l.max_stages) {
+        n = sat_add(n, 8);   // the stage count itself
+        for (uint64_t k = 0; k < l.max_stages; ++k) {
+            const auto& sl = l.stage_limits[(size_t) k];
+            for (uint64_t b : sl.max_state_bytes) if (b == open) return l.max_file_bytes;
+            uint64_t scp = sat_add(16, sat_mul(l.max_tokens, 4 + 16));   // same token/image bound as stage 0
+            for (uint64_t b : sl.max_state_bytes) scp = sat_add(scp, sat_add(8, b));
+            scp = sat_add(scp, 8);
+            n = sat_add(n, 18 * 8 + 3 * 8);                              // geometry, layer range, cvec
+            n = sat_add(n, scp);                                         // live
+            n = sat_add(n, sat_add(8, sat_mul(l.max_checkpoints, scp))); // checkpoints
+            n = sat_add(n, 8);                                           // K/V count
+            for (const auto& kvb : sl.max_kv_bytes) {
+                n = sat_add(n, 7 * 8);
+                for (uint64_t b : kvb) n = sat_add(n, sat_add(8, b));
+            }
+        }
+    }
     return std::min(n, l.max_file_bytes);
 }
 
@@ -1024,15 +1115,32 @@ uint64_t session_read_peak_bytes(uint64_t file_bytes) {
 }
 
 namespace {
-bool write_impl(const std::string& path, const SavedConversation& image, const std::vector<SessionKvSource>* sources,
+bool write_impl(const std::string& path, const SavedConversation& image,
+                const std::vector<std::vector<SessionKvSource>>* kv_stages,
                 const SessionFileIdentity& id, size_t& bytes, std::string& error, const SessionWriteOptions& opt,
                 SessionStatus& st) {
     st = {};
     st.error = SessionError::invalid;   // refusals before any disk access
     if (has_stage_parts(image)) { error = "session file: layer-split state cannot be saved"; return false; }
-    if (sources && !image.kv.empty()) { error = "session file: K/V given both in the image and as sources"; return false; }
+    // A split image must be given K/V for every stage (stage 0 plus each later stage), never fewer: a shorter list
+    // would silently drop a stage's K/V.  This is the last line of defence against silent truncation.
+    if (kv_stages && kv_stages->size() != image.stage_images.size() + 1) {
+        error = "session file: K/V given for " + std::to_string(kv_stages->size()) + " stage(s) but the image has " +
+                std::to_string(image.stage_images.size() + 1) + " (stage 0 plus " +
+                std::to_string(image.stage_images.size()) + " later stage(s))";
+        return false;
+    }
+    // K/V must come from one place per stage: the image or the sources, never both.
+    if (kv_stages) {
+        if (!image.kv.empty()) { error = "session file: K/V given both in the image and as sources"; return false; }
+        for (const auto& si : image.stage_images)
+            if (!si.kv.empty()) { error = "session file: K/V given both in the image and as sources"; return false; }
+    }
+    const bool coded = any_coded(image);
+    const uint32_t version = !image.stage_images.empty() ? kVersionStages : (coded ? kVersionCoded : kVersion);
     Out sizing;
-    put_payload(sizing, image, sources);
+    sizing.coded = coded;
+    put_payload(sizing, image, kv_stages);
     if (sizing.overflow || sizing.n > UINT64_MAX - kHeader - kTrailer ||
         sizing.n + kHeader + kTrailer > (uint64_t) std::numeric_limits<size_t>::max()) {
         error = "session file: the state is too large for this build";
@@ -1069,13 +1177,14 @@ bool write_impl(const std::string& path, const SavedConversation& image, const s
     f.write_fault = injected(fault, "write");
     f.flush_fault = injected(fault, "file_flush");
     uint8_t h[kHeader];
-    header_bytes(h, id, payload);
+    header_bytes(h, id, payload, version);
     bool ok = f.write(h, kHeader);
     SessionHasher hash(0);
     Out out;
     out.f = &f;
     out.hash = &hash;
-    if (ok) put_payload(out, image, sources);
+    out.coded = coded;
+    if (ok) put_payload(out, image, kv_stages);
     ok = ok && out.ok && out.n == payload;
     if (ok) {
         const uint64_t ph = hash.digest();
@@ -1100,13 +1209,14 @@ bool write_impl(const std::string& path, const SavedConversation& image, const s
     return false;   // Publisher removes this call's temporary file, and only that
 }
 
-bool write_guarded(const std::string& path, const SavedConversation& image, const std::vector<SessionKvSource>* sources,
+bool write_guarded(const std::string& path, const SavedConversation& image,
+                   const std::vector<std::vector<SessionKvSource>>* kv_stages,
                    const SessionFileIdentity& id, size_t& bytes, std::string& error, const SessionWriteOptions& opt,
                    SessionStatus* status) {
     SessionStatus st;
     bool ok = false;
     try {
-        ok = write_impl(path, image, sources, id, bytes, error, opt, st);
+        ok = write_impl(path, image, kv_stages, id, bytes, error, opt, st);
     } catch (const std::bad_alloc&) {
         error = "session file: out of memory while writing " + path;
         st.error = SessionError::memory;
@@ -1135,9 +1245,35 @@ const ConversationCheckpoint* session_deepest_checkpoint(const std::vector<Conve
     return deepest;
 }
 
-uint64_t session_save_peak_bytes(const ConversationCheckpoint* deepest, const SessionSaveLive& live) {
+namespace {
+// What a stored copy of `c` holds under `dest`: the arrays bytes() counts, each sized the way `dest` sizes it.
+// UINT64_MAX for a checkpoint naming a codec this build does not know - the caller refuses those anyway.
+uint64_t checkpoint_bytes_under(const ConversationCheckpoint& c, StateCodec dest) {
+    StateCodec from = StateCodec::Fp32;
+    if (!state_codec_by_code(c.state_codec, from)) return UINT64_MAX;
+    uint64_t n = sat_mul(c.ids.capacity(), sizeof(int32_t));
+    n = sat_add(n, sat_mul(c.imgs.capacity(), sizeof(ConversationImageKey)));
+    // pointers, not a list of the arrays: this is an estimate, and copying what it measures would double the
+    // allocation it exists to price
+    for (const std::vector<uint8_t>* v : {&c.gdn, &c.ple, &c.tails, &c.dead})
+        n = sat_add(n, state_codec_size(state_codec_fp32_bytes(v->size(), from), dest));
+    n = sat_add(n, c.block_pos.capacity());                                    // int32 positions, never coded
+    for (const auto& part : c.stage_parts) n = sat_add(n, checkpoint_bytes_under(part, dest));
+    return n;
+}
+} // namespace
+
+uint64_t session_save_peak_bytes(const ConversationCheckpoint* deepest, const SessionSaveLive& live,
+                                 StateCodec save_codec) {
     uint64_t n = sat_add(kBlock, uint64_t(1) << 20);                          // write buffer, small vectors
-    if (deepest) n = sat_add(n, sat_mul(2, deepest->bytes()));                // the list and the image's copy
+    if (deepest) {
+        n = sat_add(n, sat_mul(2, deepest->bytes()));                         // the list and the image's copy
+        // and, when the file will hold the checkpoint wider than the chain does - checkpoints mounted from a coded
+        // file written by an engine configured fp32 - the widening on top. Zero when codec and chain agree, which is
+        // every save this flag is off for, so that figure is the one this function has always returned.
+        const uint64_t under = checkpoint_bytes_under(*deepest, save_codec);
+        if (under > deepest->bytes()) n = sat_add(n, under - deepest->bytes());
+    }
     n = sat_add(n, live.state_bytes);                                         // the live running state
     n = sat_add(n, sat_mul(live.tokens, sizeof(int32_t)));                    // its token list
     n = sat_add(n, sat_mul(live.images, sizeof(ConversationImageKey)));       // its images
@@ -1146,11 +1282,12 @@ uint64_t session_save_peak_bytes(const ConversationCheckpoint* deepest, const Se
 }
 
 bool session_save_checkpoints(const std::vector<ConversationCheckpoint>& chain, const SessionSaveLive& live,
+                              StateCodec save_codec,
                               const std::function<bool(uint64_t need_bytes, std::string& why)>& admit,
                               std::vector<ConversationCheckpoint>& out, std::string& why) {
     out.clear();
     const ConversationCheckpoint* deepest = session_deepest_checkpoint(chain);
-    if (admit && !admit(session_save_peak_bytes(deepest, live), why)) return false;
+    if (admit && !admit(session_save_peak_bytes(deepest, live, save_codec), why)) return false;
     if (deepest) out.push_back(*deepest);
     return true;
 }
@@ -1162,7 +1299,15 @@ int64_t session_phase_limit_s(uint64_t bytes) {
 bool session_file_write(const std::string& path, const SavedConversation& meta, const std::vector<SessionKvSource>& kv,
                         const SessionFileIdentity& id, size_t& bytes, std::string& error,
                         const SessionWriteOptions& options, SessionStatus* status) {
-    return write_guarded(path, meta, &kv, id, bytes, error, options, status);
+    const std::vector<std::vector<SessionKvSource>> kv_stages{kv};   // a single stage: stage 0 only
+    return write_guarded(path, meta, &kv_stages, id, bytes, error, options, status);
+}
+
+bool session_file_write(const std::string& path, const SavedConversation& meta,
+                       const std::vector<std::vector<SessionKvSource>>& kv_stages,
+                       const SessionFileIdentity& id, size_t& bytes, std::string& error,
+                       const SessionWriteOptions& options, SessionStatus* status) {
+    return write_guarded(path, meta, &kv_stages, id, bytes, error, options, status);
 }
 
 bool session_file_write(const std::string& path, const SavedConversation& image, const SessionFileIdentity& id,
@@ -1204,7 +1349,10 @@ bool read_impl(const std::string& path, const SessionFileIdentity& id, SavedConv
     std::memcpy(&r0, h + 40, 8); std::memcpy(&r1, h + 48, 8); std::memcpy(&hh, h + 56, 8);
     if (std::memcmp(h, kMagic, 8) != 0) { error = "session file: not a Strata session file (magic)"; return false; }
     if (hh != session_hash64(h, 56, 0)) { error = "session file: header checksum mismatch"; return false; }
-    if (version != kVersion) { error = "session file: unsupported version " + std::to_string(version); return false; }
+    if (version != kVersion && version != kVersionCoded && version != kVersionStages) {
+        error = "session file: unsupported version " + std::to_string(version);
+        return false;
+    }
     if (hsize != kHeader || r0 || r1) { error = "session file: invalid header fields"; return false; }
     if (model != id.model) { error = "session file: saved with another model (model fingerprint differs)"; return false; }
     if (config != id.config) { error = "session file: saved with another engine configuration (config fingerprint differs)"; return false; }
@@ -1223,7 +1371,8 @@ bool read_impl(const std::string& path, const SessionFileIdentity& id, SavedConv
     }
     SavedConversation parsed;
     In in{&f, SessionHasher(0), payload, error, limits};
-    if (!get_payload(in, parsed)) { st.error = in.kind; return false; }
+    in.coded = version >= kVersionCoded;   // v2 and v3 carry the codec field when the state is coded
+    if (!get_payload(in, parsed, version)) { st.error = in.kind; return false; }
     if (in.left) { error = "session file: payload has " + std::to_string(in.left) + " unparsed bytes"; return false; }
     uint8_t t[kTrailer];
     if (!f.read(t, kTrailer)) { st.error = f.kind(); error = "session file: trailer read error: " + f.error(); return false; }

@@ -23,6 +23,7 @@
 #include "strata/kernels/cpu/hadamard.hpp"
 #include "strata/kernels/cpu/tq_cpu.hpp"
 #include "ggml-cpu.h"
+#include "strata/kernels/dequant_bf16.hpp"
 #include "strata/kernels/iq_kernels.hpp"
 #include "strata/kernels/ngram.hpp"
 #include "strata/kernels/native_mmvq.hpp"
@@ -443,8 +444,13 @@ int check_blob(const cpu::NativeFmt& f, const std::vector<uint8_t>& blob, int se
                 {(const uint8_t*) dblob, f.gu_type, &G}, {(const uint8_t*) dblob + f.up_off, f.gu_type, &U},
                 {(const uint8_t*) dblob + f.down_off, f.d_type, &D}};
             for (const auto& m : mats) {
-                strata::kernels::iq_dequant_f32(m.type, m.src, FF * H, dq, s);
-                strata::kernels::iq_dequant_f16(m.type, m.src, FF * H, dh, s);
+                if (strata::kernels::iq_supported(m.type)) {
+                    strata::kernels::iq_dequant_f32(m.type, m.src, FF * H, dq, s);
+                    strata::kernels::iq_dequant_f16(m.type, m.src, FF * H, dh, s);
+                } else {
+                    strata::kernels::dequant_f32(m.type, m.src, 0, FF, H, dq, s);
+                    strata::kernels::dequant_f16(m.type, m.src, 0, FF, H, dh, s);
+                }
                 cudaStreamSynchronize(s);
                 cudaMemcpy(got_dq.data(), dq, got_dq.size() * 4, cudaMemcpyDeviceToHost);
                 cudaMemcpy(got_h.data(), dh, got_h.size() * 2, cudaMemcpyDeviceToHost);
@@ -455,7 +461,10 @@ int check_blob(const cpu::NativeFmt& f, const std::vector<uint8_t>& blob, int se
                 }
             }
             // the gate matrix as an embedding table of FF rows of H values
-            strata::kernels::iq_embed_rows(f.gu_type, dblob, f.gu_row, dtk, FF, H, dq, s);
+            if (strata::kernels::iq_supported(f.gu_type))
+                strata::kernels::iq_embed_rows(f.gu_type, dblob, f.gu_row, dtk, FF, H, dq, s);
+            else
+                strata::kernels::dequant_embed_rows(f.gu_type, dblob, (int64_t) f.gu_row, dtk, FF, H, dq, s);
             cudaStreamSynchronize(s);
             cudaMemcpy(got_dq.data(), dq, got_dq.size() * 4, cudaMemcpyDeviceToHost);
             size_t emb_differ = 0;
@@ -799,14 +808,6 @@ int main(int argc, char** argv) {
                              "       native_expert_parity --gguf-embd <model.gguf> [rows]   (token_embd rows vs to_float)\n"
                              "       native_expert_parity --gguf-ple <model.gguf> [tokens]  (PLE rows via PleTable vs to_float)\n");
         return 2;
-    }
-    // #152's width check tests the opt-in rule (the multi-token kernels from one token on)
-    if (std::getenv("STRATA_IQ_MT_MIN") == nullptr) {
-#ifdef _WIN32
-        _putenv_s("STRATA_IQ_MT_MIN", "1");
-#else
-        setenv("STRATA_IQ_MT_MIN", "1", 1);
-#endif
     }
     int failures = 0;
     cudaStream_t s;

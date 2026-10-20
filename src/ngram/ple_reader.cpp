@@ -339,14 +339,15 @@ bool PleReader::open(const std::string& path, uint64_t table_offset, uint64_t n_
     if (max_inflight == 0 || max_inflight > 1024) { err = "PleReader: max_inflight must be 1..1024"; return false; }
     if (row_bytes == 0 || row_bytes > PAGE) { err = "PleReader: row_bytes must be 1..4096"; return false; }
     if (!impl_->file.open(path, err)) return false;
-    impl_->row_bytes = row_bytes;
-    if (table_offset + n_rows * (uint64_t) row_bytes > impl_->file.size()) {
+    if (table_offset > impl_->file.size() ||
+        n_rows > (impl_->file.size() - table_offset) / row_bytes) {
         err = "PleReader: the table extends past the end of " + path;
         close();
         return false;
     }
     impl_->table_offset = table_offset;
     impl_->n_rows = n_rows;
+    impl_->row_bytes = row_bytes;
     impl_->max_inflight = max_inflight;
     impl_->slab = (uint8_t*) DirectFile::alloc_aligned((size_t) max_inflight * 2 * PAGE);
     if (impl_->slab == nullptr) { err = "PleReader: cannot allocate read buffers"; close(); return false; }
@@ -409,7 +410,7 @@ void PleReader::close() {
     m.delayed.clear();
     m.inflight.clear();
     m.free_slots.clear();
-    m.cache.init(0);
+    m.cache.init(0, m.row_bytes);
     m.threaded = false;
     m.stop = false;
     m.keep_us = 0;

@@ -1,4 +1,4 @@
-// src/kernels/ngram.cpp - P2.S4: the PLE n-gram hash and the IQ4_NL table read.
+// src/kernels/ngram.cpp - P2.S4: the PLE n-gram hash and quantized table reads.
 //
 // See include/strata/kernels/ngram.hpp for the semantics, the rival readings, and the note on MADV_RANDOM.
 #include "strata/kernels/ngram.hpp"
@@ -184,7 +184,7 @@ const PleFormatInfo kPleFormats[] = {
     {PleFormat::Q5_0, "Q5_0", "Q5_0", (PLE_HEAD_DIM / 32) * 22, false, dequant_blocks<strata::dequantize_q5_0, 22>},
     {PleFormat::F8_E4M3, "F8_E4M3", "I8", PLE_ROW_BYTES_FP8, true, dequant_fp8},
     // Ordinary GGUFs ship the table in other types: Unsloth's UD-Q6_K_XL and Swift-1.5 Q4_K_L as Q8_0, a Q5_K_M finetune as Q5_1
-    {PleFormat::Q5_1, "Q5_1", "Q5_1", PLE_ROW_BYTES_Q5_1, false, dequant_blocks<strata::dequantize_q5_1, 24>},
+    {PleFormat::Q5_1, "Q5_1", "Q5_1", PLE_Q5_1_ROW_BYTES, false, dequant_blocks<strata::dequantize_q5_1, 24>},
     {PleFormat::Q8_0, "Q8_0", "Q8_0", PLE_ROW_BYTES_Q8_0, false, dequant_blocks<strata::dequantize_q8_0, 34>},
     // Q4_0 (plain llama-quantize Q4_0 files, #599): 90-byte rows like IQ4_NL (18-byte blocks), a linear 4-bit grid
     {PleFormat::Q4_0, "Q4_0", "Q4_0", PLE_ROW_BYTES, false, dequant_blocks<strata::dequantize_q4_0, 18>},
@@ -277,8 +277,8 @@ bool PleTable::open(const std::string& gguf_path, std::string& err, const PleIoO
         return false;
     }
     // The table's type is looked up in the format list (ple_formats()): IQ4_NL (ISTA-DASLab's shard 2, the original's
-    // own GGUF), Q5_0 (#296: OrcaRouter's GGUF), or the FP8 table as shipped: I8 bytes marked strata.ple.format =
-    // f8_e4m3 with strata.ple.scale (tools/ple_fp8_pack.py)
+    // own GGUF), Q5_0 (#296: OrcaRouter's GGUF), Q5_1 (Q5_K_M), or the FP8 table as shipped: I8 bytes marked
+    // strata.ple.format = f8_e4m3 with strata.ple.scale (tools/ple_fp8_pack.py)
     const PleFormatInfo* fmt = nvfp4x16 ? &ple_format_info(PleFormat::NVFP4) : ple_format_for_type(t->type_name());
     if (fmt == nullptr) {
         err = std::string("per_layer_token_embd.weight is ") + t->type_name() + ", not " + ple_format_list();
@@ -298,9 +298,7 @@ bool PleTable::open(const std::string& gguf_path, std::string& err, const PleIoO
     }
     impl_->fmt = fmt;
     impl_->rb = fmt->row_bytes;
-    // PleReader's row_bytes has been a runtime parameter since the FP8 table (160 B rows) needed it; Q5_0's
-    // 110 B rows go through the exact same generic path (ple_reader_test --selftest covers both 90 and 110 B
-    // rows: straddling, caching, in-flight tickets, keep-alive). This refusal was stale.
+    // PleReader's runtime row size covers every format, including wider Q5_0, Q5_1, Q8_0 and BF16 rows.
     impl_->n_rows = t->shape[1];
 
     // THE CHECK THAT MAKES THE OFFSET FALSIFIABLE.  The manifest's `shard2_tensor.offset` is 0, but that is
@@ -325,7 +323,7 @@ bool PleTable::open(const std::string& gguf_path, std::string& err, const PleIoO
     if (t->offset > have || need > have - t->offset || (alone && (t->offset != 0 || need != have))) {
         char buf[256];
         std::snprintf(buf, sizeof buf,
-                      "PLE table size mismatch: %llu rows x %d B = %llu at offset %llu, but the file holds %llu from "
+                      "PLE table size mismatch: %llu rows x %u B = %llu at offset %llu, but the file holds %llu from "
                       "data_start %llu",
                       (unsigned long long) impl_->n_rows, (int) impl_->rb, (unsigned long long) need,
                       (unsigned long long) t->offset, (unsigned long long) have,

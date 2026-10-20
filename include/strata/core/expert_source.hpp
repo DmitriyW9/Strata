@@ -469,6 +469,41 @@ struct PcieModel {
     }
 };
 
+namespace detail {
+
+/// The verify window's GPU plan (Plan v0.3 P6), split out of `expert_pool_dispatch_multi` so a test can
+/// drive it without a GPU, a source or a cache: the production call fills the input from the dispatch's own
+/// state.  `kind` (n entries) and the sink's arrays are the outputs; `dma_src` (capacity 64) receives the
+/// PCIe groups' pinned blobs in group order.
+struct WindowGpuPlanInput {
+    const int32_t* ids = nullptr;          ///< n entries (n_tok * k), routing order
+    int64_t n = 0;
+    int64_t k = 0;
+    int64_t n_expert = 0;
+    const int32_t* host_res = nullptr;     ///< this layer's row of the residency table (n_expert entries)
+    bool (*peer_has)(void* ctx, int32_t e) = nullptr;               ///< nullable: no peer GPU
+    bool (*helper_holds)(void* ctx, int32_t e) = nullptr;           ///< nullable: no helper GPU
+    const uint8_t* (*pinned_blob)(void* ctx, int32_t e) = nullptr;  ///< the blob, only when page-locked
+    const uint8_t* (*device_alias)(void* ctx, int32_t e) = nullptr; ///< the mapped device address (pcie_mode != 0)
+    void* ctx = nullptr;
+    int pcie_num = 0;                      ///< the PCIe share of the misses, /256
+    bool pcie_layer = false;               ///< the source allows a PCIe share of this layer's misses at all
+    const uint8_t* cache_base = nullptr;   ///< the slot arena's device address
+    int64_t cache_blob = 0;                ///< bytes per slot
+    const uint64_t* cache_slot_off = nullptr;  ///< nullable: per-slot offsets, uniform slots otherwise
+    int64_t* pcie_experts = nullptr;           ///< nullable; incremented once per PCIe group
+    int tail_rank = 0;                         ///< STRATA_ROUTE_TAIL_SKIP: a missed expert every token of the window routes only at rank >= this is skipped (0: off)
+    bool (*fs_take)(void* ctx, int32_t e, unsigned long long& ptr) = nullptr;  ///< Foresight: a landed swap-space slot holds it (nullable)
+    void (*fs_note_miss)(void* ctx, int32_t e) = nullptr;  ///< Foresight: record a miss it may swap in (nullable)
+    int64_t* tail_experts = nullptr;           ///< nullable; incremented once per skipped tail expert
+    bool pcie_min1 = false;                    ///< STRATA_PCIE_MIN1: with >= 2 misses give the PCIe lane at least one
+};
+
+void window_gpu_plan(const WindowGpuPlanInput& in, GpuPlanSink& P, int32_t* kind, int64_t blob_bytes,
+                     const uint8_t** dma_src);
+
+}  // namespace detail
+
 /// The adapter's own state.  One per session, reused every layer so the token path allocates nothing (P2.T10).
 struct ForesightSwap;
 

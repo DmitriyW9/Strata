@@ -732,6 +732,12 @@ struct Options {
     /// --serve SAVE: disk space a session file must leave free where it is written (MiB; 0 = no check)
     int64_t session_min_free_mib = 4096;
     bool session_save_reclaim = false;
+    /// --serve: how a stored conversation's running state is held in parked conversation-cache
+    /// images and session files: "fp32" (the bytes the engine computes) or "bf16" (half the bytes,
+    /// every value within 2^-8 of what it was). The state the engine computes on, and its live
+    /// checkpoint chain, are always fp32, whatever this says. strata/core/state_codec.hpp.
+    std::string session_state_codec = "fp32";
+    strata::core::StateCodec session_state_codec_id = strata::core::StateCodec::Fp32;   // from the name above
     /// --serve: also keep a checkpoint every N freshly read prompt tokens (0 = only at the last turn boundary)
     int64_t prompt_cache_every = 16384;
     bool prompt_cache_tail = false;   // optional extra checkpoint at an existing near-tail chunk boundary
@@ -887,6 +893,9 @@ void usage() {
                  "                       write a whole snapshot that the next turn drops (default 0 = park every turn)\n"
                  "  --session-min-free-mib N  --serve: disk space a SAVE must leave free (default 4096; 0 = no check)\n"
                  "  --session-save-reclaim  --serve: reclaim unpinned host caches if SAVE needs RAM (opt-in)\n"
+                 "  --session-state-codec NAME  --serve: how a stored conversation's running state is held:\n"
+                 "                       fp32 (default) or bf16 (half the bytes, within 2^-8 per value). Affects what\n"
+                 "                       is parked and what a SAVE writes; the live state is never coded\n"
                  "  --vram-elastic       --serve (#533, opt-in, NVIDIA): the expert cache in segments (--vram-segment-mib,\n"
                  "                       default 512), so the command `VRAM <reserve_mib>` (the server's POST /v1/vram) can\n"
                  "                       give VRAM back to other programs between requests and take it back later\n"
@@ -2031,6 +2040,15 @@ double probe_pcie_h2d_gbps(std::string* samples = nullptr) {
     return bw;
 }
 
+// The expert arena's load threads (the pack's cold read + fill).  The default is the 6 the 7600/5070 PC was
+// measured with; STRATA_ARENA_THREADS changes it on a machine with more cores, where the same 75 GiB read is
+// queue-depth limited rather than core limited (the same lever as STRATA_FETCH_THREADS on the mmap path).
+int arena_threads() {
+    if (const char* v = std::getenv("STRATA_ARENA_THREADS"); v != nullptr && std::atoi(v) > 0)
+        return std::atoi(v);
+    return 6;
+}
+
 // The PCIe share of the missed experts for a link measured at `gbps`: `base` (the share measured on x16 links) from
 // 20 GB/s up, and below that in proportion to the bandwidth, so the time the link spends on its share stays about
 // what the x16 share costs.  Continuous (#485): before, 19.9 GB/s gave 0.42 and 20.0 the full 0.55 (and 4.0 GB/s
@@ -2579,6 +2597,14 @@ int main(int argc, char** argv) {
         else if (a == "--serve") o.serve = true;
         else if (a == "--vision") o.vision = true;
         else if (a == "--session-save-reclaim") o.session_save_reclaim = true;
+        else if (a == "--session-state-codec") {
+            const std::string value = next(a.c_str());
+            if (!strata::core::state_codec_by_name(value, o.session_state_codec_id)) {
+                std::fprintf(stderr, "%s wants fp32 or bf16 (got '%s')\n", a.c_str(), value.c_str());
+                return 2;
+            }
+            o.session_state_codec = value;
+        }
         else if (a == "--prompt-cache") o.prompt_cache = std::max(0, std::atoi(next("--prompt-cache")));
         else if (a == "--conversation-cache-mib" || a == "--conversation-cache-slots" ||
                  a == "--conversation-cache-min-free-mib" || a == "--conversation-cache-min-tokens" ||
@@ -5748,7 +5774,7 @@ int main(int argc, char** argv) {
         // engine allocates after it (the verify window's staging: "mapped staging allocation failed", exit 1).  Keep a
         // reserve while the arena pins and hand it back after (pin_budget.hpp).
         strata::core::pin_reserve_take();
-        const bool arena_ok = arena_src.open(o.pack, g.n_layers, g.n_expert, /*threads=*/6, err, pin_limit,
+        const bool arena_ok = arena_src.open(o.pack, g.n_layers, g.n_expert, arena_threads(), err, pin_limit,
                                              o.shared_expert_arena);
         strata::core::pin_note_arena(arena_src.pinned_arena_bytes());
         strata::core::pin_sim_report("after the expert arena");
@@ -11885,7 +11911,8 @@ int main(int argc, char** argv) {
                         const uint64_t floor = (uint64_t) o.conversation_cache_min_free_mib << 20;
                         if (o.session_save_reclaim) {
                             const auto freed = strata::core::session_save_reclaim(
-                                checks, conversations, sl, floor, strata::core::available_host_bytes);
+                                checks, conversations, sl, o.session_state_codec_id, floor,
+                                strata::core::available_host_bytes);
                             if (freed.bytes || freed.checkpoints || freed.parked) {
                                 // A removed tail must not mark a later checkpoint at this length as a tail.
                                 if (tail_ckpt_len >= 0 && std::none_of(checks.begin(), checks.end(), [&](const auto& c) {
@@ -11908,7 +11935,8 @@ int main(int argc, char** argv) {
                         };
                         std::vector<ConvCheckpoint> disk_checks;
                         std::string why;
-                        if (!strata::core::session_save_checkpoints(checks, sl, admit, disk_checks, why)) {
+                        if (!strata::core::session_save_checkpoints(checks, sl, o.session_state_codec_id,
+                                                                    admit, disk_checks, why)) {
                             refuse(why, strata::core::SessionError::memory);
                             continue;
                         }

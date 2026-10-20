@@ -1446,7 +1446,9 @@ to 4; Anthropic `stop_sequences`): the answer ends before the first one, which i
 there (`finish_reason` "stop"; `stop_reason` "stop_sequence" with `stop_sequence` set to the one found); with the default adaptive expert tier a sampled result
 is not reproducible run to run - for seed-reproducible output add `--adapt-every 100000` (static residency) to the
 engine arguments. The run config's optional `sampling` block sets the defaults for requests that leave the fields out
-(`"sampling": {"temperature": 1.0, "top_p": 0.95, "top_k": 20}`); a request's own fields always win. **With no
+(`"sampling": {"temperature": 1.0, "top_p": 0.95, "top_k": 20}`); a request's own fields always win. Chat defaults
+shared with API clients, including `reasoning_effort`, are stored next to the run config in
+`strata-<model>.shared-settings.json`. **With no
 block at all (0.1.45) a request without sampling keys gets the sampling the model card recommends**, picked by the
 request's thinking state: Qwen3.8-Flash-Next (and Gyro) thinking temperature 1.0, top_p 0.95, top_k 20; not thinking temperature 0.7,
 top_p 0.8, top_k 20, presence_penalty 1.5. Qwen3.6-35B-A3B thinking 1.0 / 0.95 / 20 with presence_penalty 1.5, not thinking

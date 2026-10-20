@@ -255,6 +255,7 @@ strata_resolve(_engine src/core/layer.cpp src/core/session.cpp src/core/expert_s
                        src/core/conversation_memory.cpp   # 0.1.31: the conversation snapshots (#216)
                        src/core/arch_defaults.cpp src/core/vmm.cpp   # vmm.cpp is the port's stub: no driver VMM on Level Zero
                        src/core/conversation_file.cpp
+                       src/core/state_codec.cpp   # --session-state-codec: conversation_file.cpp and conversation_state.cpp both call it
                        src/core/peer_experts.cpp src/core/remote_expert_opt_stub.cpp)         # 0.1.36+: --peer-device (a stub in the port: no second GPU tier yet)
 add_library(strata_engine STATIC ${_engine} ${CMAKE_CURRENT_SOURCE_DIR}/src/core/gguf_expert_source.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/src/core/copy_queue.cpp)   # 0.1.43: a queue on the copy engine
@@ -421,6 +422,12 @@ if(STRATA_SYCL_PARITY)
   # one native expert three ways on real GGUF rows (ggml reference, CPU path, GPU native_expert_grouped):
   #   native_expert_parity <shard1.gguf> [layer ...]
   if(STRATA_NATIVE_EXPERTS)
+    # CPU dispatch must keep a token's IQ rows unchanged when other drafts join its expert group.
+    add_executable(iq_avx2_parity ${STRATA_ROOT}/src/kernels/cpu/iq_avx2_parity.cpp)
+    target_link_libraries(iq_avx2_parity PRIVATE strata_kernels_cpu)
+    add_test(NAME iq_avx2_parity COMMAND iq_avx2_parity)
+    add_test(NAME iq_avx2_parity_no_iq512 COMMAND ${CMAKE_COMMAND} -E env STRATA_NO_IQ512=1 $<TARGET_FILE:iq_avx2_parity>)
+    add_test(NAME iq_avx2_parity_ggml COMMAND ${CMAKE_COMMAND} -E env STRATA_NO_IQ512=1 STRATA_NO_IQ256=1 STRATA_NO_IQ4NL=1 $<TARGET_FILE:iq_avx2_parity>)
     add_executable(native_expert_parity ${CMAKE_CURRENT_SOURCE_DIR}/src/kernels/native_expert_parity.cpp)
     target_include_directories(native_expert_parity PRIVATE ${STRATA_ROOT}/third_party/ggml)
     target_link_libraries(native_expert_parity PRIVATE strata_kernels strata_kernels_cpu)

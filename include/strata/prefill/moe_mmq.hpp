@@ -34,6 +34,12 @@ size_t q8_bytes(int64_t rows, int64_t cols);
 /// ids is null); `x` has `ld` floats per row.
 void quantize(const float* x, const int32_t* ids, void* xq, int ggml_type, int64_t cols, int64_t ld, int64_t rows,
               void* stream, float* yscale = nullptr);
+/// The rows quantize(x, src, ...) writes for tokens x k_used rows in expert order, written token by token: token t's
+/// row of x is quantized once and stored at rows slot[t * k_used + k] (`slot` the inverse of `src`) - the same bytes,
+/// a k_used-th of the quantizations (llama.cpp's quantize_scatter_mmq_q8_1_cuda).  STRATA_QUANT_GATHER=1: quantize()
+/// over `src`, as before.
+void quantize_scatter(const float* x, const int32_t* slot, const int32_t* src, void* xq, int ggml_type, int64_t cols,
+                      int64_t ld, int64_t tokens, int k_used, void* stream);
 /// NVFP4 on Blackwell in w4a4 mode: the MMQ kernel multiplies FP4 x FP4, so its activations are NVFP4 too, with
 /// one float scale per row that `quantize` writes to `yscale` and the product reads as Product::y_scale.  Decided
 /// by the mode and a device probe of the same compile.
@@ -81,6 +87,9 @@ struct Product {
     /// set: expert z's matrix starts at tab->p[z] (w and expert_bytes are not used for addressing).  CUDA only,
     /// and only where `tab_fits` said so.
     const WeightTab* tab = nullptr;
+    /// Set: expert i's matrix is at w_ptrs[i] (a device table) instead of w + i * expert_bytes - the experts are read
+    /// in place.  Needs llama.cpp's MMQ with the build's pointer-table patch (inplace_ok()).
+    const void* const* w_ptrs = nullptr;
 };
 
 /// The launch context (llama.cpp's MMQ keeps a small scratch pool for its stream-k fixup).  One per prompt path.
@@ -115,6 +124,11 @@ struct GatherGroup {
 bool gather_native_group(const GatherGroup& g, size_t up_off, size_t gu_half_bytes, size_t down_off, size_t d_bytes,
                          void* gu_dst, size_t gu_stride, void* d_dst, size_t d_stride, void* stream,
                          size_t tail_off = 0, void* tail_dst = nullptr, size_t zero_bytes = 0);
+/// This build's MMQ reads Product::w_ptrs (CMake patched llama.cpp's mmq.cuh: STRATA_MMQ_X_PTRS).
+bool inplace_ok();
+/// table[q] for q in [g.first, g.n): the group's gate/up matrices, each blob itself (`copied` false: read in place,
+/// gate rows then up rows) or its copy at gu_dst + q * gu_stride (gathered there by gather_native_group).
+void group_ptrs(const GatherGroup& g, const void* gu_dst, size_t gu_stride, bool copied, const void** table, void* stream);
 /// A Strata-pack Q2_0 expert blob (codes and fp16 scales in separate planes, gate/up rows interleaved) into GGUF
 /// Q2_0 blocks: gate/up [1280, 2560] at `gu_dst` (rows stay interleaved), down [2560, 640] at `d_dst`.  Same values.
 void gather_strata_q2(const uint8_t* blob, void* gu_dst, void* d_dst, void* stream);

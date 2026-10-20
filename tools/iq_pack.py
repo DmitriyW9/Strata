@@ -1,4 +1,5 @@
-"""tools/iq_pack.py - plan v0.3 P6: a native pack for any of the model files (Q2_0, IQ2_XS, IQ3_XXS).
+"""tools/iq_pack.py - plan v0.3 P6: a native pack for any of the model files (Q2_0, IQ2_XS, IQ3_XXS, and a plain
+K-quant file like Q4_K_M with --compat-bf16).
 
     python tools/iq_pack.py --gguf <model>-00001-of-00002.gguf --out pack/iq3_xxs            (standalone)
     python tools/iq_pack.py --gguf <model>-00001-of-00002.gguf --base pack/full --out ...    (share dense.bin)
@@ -31,6 +32,8 @@ layer's shard column is per role, `gate,up,down` (an empty field = the --gguf sh
 v4, so an older engine refuses it instead of misreading it.  Every other pack stays v3, byte for byte.  Router
 tensors stored as F32 whose values are exactly BF16 (Swift 1.5) are written as BF16, the form the engine's router
 takes (so are the other F32 tensors the engine reads as BF16, when exact); anything else is refused.
+The Uncensored Q4_K_M release's three shards split layer 4 between shard 1 (down) and shard 2 (gate/up), recorded
+as the per-role v4 shard column.
 
 For ordinary quants, --compat-bf16 dequantizes the small projections that the engine reads as BF16, using
 round-to-nearest-even. This introduces BF16 rounding; it does not reconstruct the original full-precision

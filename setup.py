@@ -3,8 +3,9 @@
 
     START-HERE.bat  (Windows)   /   ./setup.sh  (Linux)      - they install Python if needed and run this file
 
-The first time it asks four questions - which model (the original Qwen3.8-Flash-Next or the Swift 1.5 fine-tune),
-which size, how much context, and whether the model should also read images - then installs everything and starts the model on http://127.0.0.1:8080 (OpenAI- and Anthropic-compatible
+The first time it asks four questions - which model (the original Qwen3.8-Flash-Next, the Swift 1.5 fine-tune, or
+the Uncensored Q4_K_M or Q5_K_M release), which size, how much context, and whether the model should also read images - then
+installs everything and starts the model on http://127.0.0.1:8080 (OpenAI- and Anthropic-compatible
 API; a small page there shows that it runs). Every later start skips straight to running the model: nothing that
 is already downloaded, installed or prepared is done again.
 
@@ -20,7 +21,8 @@ What the first run does (each step is skipped when it is already done):
   6. prepares the model for Strata and fetches the MTP draft layer (~5 GB, from the original Qwen checkpoint)
   7. writes run-<model>.bat / run-<model>.sh and starts the model
 
-Options: --family qwen|swift, --model Q2_0|IQ2_XS|IQ3_XXS|IQ3_S, --context 32768, --rope-scaling none|linear|yarn
+Options: --family qwen|swift|coder|uncensored, --model Q2_0|IQ2_XS|IQ3_XXS|IQ3_S|IQ1_M|Q4_K_M|Q5_K_M, --context 32768,
+--rope-scaling none|linear|yarn
 (--rope-scale F; past the trained 262144 the setup adds yarn and the factor is the final context over 262144,
 at least 1 - an explicit --rope-scaling none is refused for such a context), --vision yes|no|gpu|cpu, --port
 8080, --yes (recommended
@@ -91,6 +93,7 @@ HF_REVISIONS = {
     "ukisai/Swift-1.5-Qwen3.8-Flash-Next-GSQ-RCO-GGUF": "99bb8f7f95c7aa7b24a36a7786a4f657b30f5d3d",   # 2026-10-07 (adds IQ3_S)
     "ISTA-DASLab/Qwen3.8-Flash-Next-GSQ-RCO-Coder-GGUF": "5348543e0147355ac9cbcb031184a3546350988e",  # 2026-09-29
     "unsloth/Qwen3.8-Flash-Next-GGUF": "38bb39ee97821de2c9009abb7e93950eec396e66",                   # 2026-09-30
+    "orcarouter/Qwen3.8-Flash-Next-Uncensored-GGUF": "0434906af7b5202b676d43f108cf4f73d25691ef",  # 2026-10-01
     "unsloth/Qwen3.6-35B-A3B-MTP-GGUF": "5bc3e238d916f48a861bac2f8a1990a0e9b7e98d",                  # 2026-10-12
     "agentionai/Qwen3.8-Flash-Next-Gyro-GGUF": "1ada08422e404aca51ab9df665f089f34c419c6b",           # 2026-10-13
 }
@@ -397,8 +400,7 @@ CODER_FILES = {
 }
 
 MODELS = {
-    # the original model only for now: Swift 1.5's Q2_0 files split one layer's experts across the two shards, which
-    # the pack tool (tools/iq_pack.py) cannot prepare yet (#171)
+    # Q2_0 is enabled for the original release; Swift's Q2_0 expert files are a separate, unvalidated setup target.
     "Q2_0": {"about": "2-bit, the fastest", "download_gb": 66.4, "ram_gb": 48, "arena_gb": 34.0, "families": ("qwen",)},
     "IQ2_XS": {"about": "2-bit i-quant, a little better quality, close in speed", "download_gb": 68.0, "ram_gb": 48,
                "arena_gb": 35.5},
@@ -410,6 +412,15 @@ MODELS = {
     # the Coder release: 256 of the 512 experts kept (the ones code, tools and vision use), IQ2_S-IQ4_XS like IQ3_S
     "IQ1_M": {"about": "the Coder's only size: half the experts, stored like IQ3_S (3.5 bits)", "download_gb": 58.4,
               "ram_gb": 32, "arena_gb": 23.4, "families": ("coder",)},
+    # OrcaRouter's Uncensored release in plain K-quants, not GSQ-RCO's i-quants. Both sizes have a Q5_0 per-layer
+    # token embedding table, which stays on the SSD; --compat-bf16 converts small projections that the quant also
+    # compresses. Q5_K_M experts occupy 91.9 GB and need ~104 GB RAM with the setup's usual headroom.
+    "Q4_K_M": {"about": "4-bit plain quant; needs ~92 GB of RAM",
+               "download_gb": 119.1, "ram_gb": 92,
+               "arena_gb": 80.5, "families": ("uncensored",)},
+    "Q5_K_M": {"about": "5-bit, higher quality than Q4_K_M; needs ~104 GB of RAM",
+               "download_gb": 134.1, "ram_gb": 104,
+               "arena_gb": 91.9, "families": ("uncensored",)},
     # #621: Unsloth's UD-IQ4_XS - IQ3_S gate/up experts with IQ4_NL (43 layers) or Q8_0 (5) downs, the dense side as
     # UD-Q4_K_XL's; three shards.  A regular choice from 0.1.39 (no longer experimental).  Its 59.5 GB of experts: a
     # RAM budget of them, like UD-Q4_K_XL, but far fewer read from the SSD on a 64 GB PC and none from ~80 GB of RAM.
@@ -485,6 +496,11 @@ MODELS = {
                              "Agreement) with Qwen3.8-Flash-Next's Qwen Community License 1.0: "
                              "https://huggingface.co/nvidia/Qwen3.8-Flash-Next-FP4-Local"},
 }
+# The model families: the same architecture and the same files per size, different weights and different files.
+# A family whose files usually already sit in a folder the user downloaded (a Hugging Face snapshot) lists it in
+# "local": setup uses what is already there and downloads only what is missing (STRATA_MODEL_DIR points elsewhere).
+LOCAL_MODELS = [Path(p) for p in os.environ.get("STRATA_MODEL_DIR", str(Path.home() / "projects/ai/LLM/models"))
+                .split(os.pathsep) if p]
 # The experimental Unsloth file's four shards at the pinned revision: name -> (bytes, sha256), checked after the
 # download (setup trusts no other model file by name and size alone either: check_shards reads their directories).
 UNSLOTH_SHARDS = {
@@ -592,6 +608,18 @@ FAMILIES = {
                 "mmproj": "mmproj-Qwen3.8-Flash-Next-BF16.gguf", "name": "qwen3.8-flash-next-unsloth",
                 "vision": True, "pack_args": ["--compat-bf16"],
                 "sha256": {**UNSLOTH_SHARDS, **UNSLOTH_IQ4_XS_SHARDS, **UNSLOTH_BIG_SHARDS}},
+    # the abliterated ("uncensored") fine-tune, in the quant its author shipped it in: THREE shards (the per-layer
+    # token embedding table is in shard 1), and an ordinary quant, so selected small projections the kernels read as
+    # BF16 are Q4_K/Q5_0/Q6_K here and the pack converts them (see docs/ORCA.md for the precision impact)
+    "uncensored": {"title": "Qwen3.8-Flash-Next Uncensored",
+                   "by": "an abliterated fine-tune of Qwen3.8-Flash-Next, in plain K-quants",
+                   "about": "the same architecture without refusal training; Q4_K_M or Q5_K_M",
+                   "hf": hf("orcarouter/Qwen3.8-Flash-Next-Uncensored-GGUF"),
+                   "file": "Qwen3.8-Flash-Next-Uncensored-{q}-0000{i}-of-00003.gguf", "tag": "uncensored-",
+                   "shards": 3, "local": LOCAL_MODELS, "compat_bf16": True, "requires_source_build": True,
+                   "cuda_only": True,
+                   "mmproj_hf": hf("orcarouter/Qwen3.8-Flash-Next-Uncensored-GGUF"),
+                   "mmproj": "mmproj-Qwen3.8-Flash-Next-Uncensored-F16.gguf", "name": "qwen3.8-flash-next-uncensored"},
     # MODEL-UPDATE Phase 4: the original model with NVFP4 experts, as ready-made packs (NVFP4_REPOS): the files come
     # as the engine reads them (no GGUF to pack), each size has its own repository ("repo" in MODELS)
     # agentionai's Gyro quantizations (see GYRO_FILES): after the regular families, never the default
@@ -1844,7 +1872,7 @@ def gpu_info(pick=None):
 def find_nvcc(below=None):
     """The newest CUDA toolkit's nvcc and its (major, minor); with `below`, the newest older than that version.
     #601: STRATA_NVCC=<path to nvcc> is the only one considered (a newer toolkit beside it that cannot build on this
-    PC - CUDA 12.9 with glibc 2.43 - is not taken instead)."""
+    PC is not taken instead)."""
     pick = os.environ.get("STRATA_NVCC")
     if pick:
         if not Path(pick).exists():
@@ -1857,7 +1885,13 @@ def find_nvcc(below=None):
                      f"{below[0]}.{below[1]}")
                 return (None, None)
             return (pick, ver) if ver else (None, None)
-    cands = [shutil.which("nvcc")]
+    # Resolve the symlink on PATH: a distribution toolkit is often /usr/bin/nvcc -> /opt/cuda (or /usr/local/cuda)
+    # /bin/nvcc, and enable_language(CUDA) derives the toolkit root from the compiler path.  An older nvcc printed a
+    # "#$ TOP=" line when CMake probed it, so the real root was recovered from the symlink; CUDA 13.4's nvcc no longer
+    # recognises that probe, so CMake fell back to dirname(/usr/bin/nvcc) = /usr and failed with "Couldn't find CUDA
+    # library root".  Handing CMake the resolved toolkit path directly is correct for every toolkit.
+    w = shutil.which("nvcc")
+    cands = [str(Path(w).resolve()) if w else None]
     for var in ("CUDA_PATH", "CUDA_HOME"):           # CUDA_HOME: Linux's usual name (#601)
         if os.environ.get(var):
             cands.append(str(Path(os.environ[var]) / "bin" / ("nvcc.exe" if WIN else "nvcc")))
@@ -2478,14 +2512,20 @@ def gguf_dir_shards(folder: Path, fam: dict, model: str) -> list[Path]:
 GGUF_QUANT = re.compile(r"(?<![A-Za-z0-9])((?:UD-)?(?:I?Q\d+(?:_[A-Za-z0-9]+)*|BF16|F16|F32))"
                         r"(?=-\d{5}-of-\d{5}\.gguf$|\.gguf$)", re.I)
 SUPPORTED_GGUFS = ("Strata runs ISTA-DASLab's GSQ-RCO files (Qwen3.8-Flash-Next Q2_0, IQ2_XS, IQ3_XXS, IQ3_S; Swift "
-                   "1.5's; the Coder's IQ1_M) and Unsloth's UD-IQ4_XS, UD-Q4_K_XL, UD-Q5_K_XL, UD-Q6_K_XL and Q8_0 "
-                   "only: other GGUFs (Unsloth's UD-IQ3_XXS or UD-Q2_K_XL, other K-quant files) cannot be used")
+                   "1.5's; the Coder's IQ1_M), Unsloth's UD-Q4_K_XL and UD-IQ4_XS only, and OrcaRouter's exact three-shard "
+                   "Qwen3.8-Flash-Next-Uncensored Q4_K_M/Q5_K_M files; other GGUFs (Unsloth's UD-IQ3_XXS or UD-Q2_K_XL, "
+                   "other Q4_K_M files, K-quants) cannot be used")
 
 
 def gguf_unsupported(name: str) -> str | None:
     """#444: the quantization a GGUF's name says, when it is one Strata cannot run (not a setup size); else None."""
     m = GGUF_QUANT.search(name)
-    return m.group(1) if m and m.group(1).upper() not in MODELS and not name.lower().startswith("mmproj") else None
+    quant = m.group(1).upper() if m else None
+    supported_uncensored_quant = quant not in ("Q4_K_M", "Q5_K_M") or \
+        gguf_choice(name) == ("uncensored", quant)
+    return m.group(1) if m and (quant not in MODELS or not supported_uncensored_quant) and \
+        not name.lower().startswith("mmproj") \
+        else None
 
 
 def gguf_choice(name: str) -> tuple | None:
@@ -3471,6 +3511,7 @@ def amd_parse_gpus(text, amd) -> list:
 # numbered as the HIP runtime numbers them (`strata-device --list-devices`): an integrated Radeon takes HIP's device 0
 # and pushes the discrete card to 1, which the display-adapter order does not show (#325).
 WIN_HIP_ASSET = "strata-windows-x64-hip.zip"
+WIN_HIP_EXE = "strata.exe"
 WIN_HIP_MIN_ENGINE = max(MIN_ENGINE, (0, 1, 33))         # the first release with a Windows HIP engine
 WIN_AMD_DRIVER = "https://www.amd.com/en/support/download/drivers.html"
 # PCI device ids (VEN_1002) of the cards the AMD backend knows; the names below cover a card whose id is not listed
@@ -3735,7 +3776,7 @@ def get_prebuilt_hip(url_base, gpu, updating=False) -> Path | None:
     acquisition.require("the ready-made AMD engine")
     eng = ROOT / "engine"
     info = eng / "BUILD.json"
-    if info.exists() and (eng / EXE).exists():
+    if info.exists() and (eng / WIN_HIP_EXE).exists():
         try:
             meta = json.loads(info.read_text(encoding="utf-8"))
         except ValueError:
@@ -3780,7 +3821,7 @@ def get_prebuilt_hip(url_base, gpu, updating=False) -> Path | None:
         meta = {}
     ver = tuple(int(x) for x in str(meta.get("version", "0")).split(".")[:4] if x.isdigit())
     why = None
-    if meta.get("backend") != "hip" or not (tmp / EXE).exists():
+    if meta.get("backend") != "hip" or not (tmp / WIN_HIP_EXE).exists():
         why = "it is not a HIP engine"
     elif ver < WIN_HIP_MIN_ENGINE:
         why = f"it is version {meta.get('version')}; this setup needs {'.'.join(map(str, WIN_HIP_MIN_ENGINE))}"
@@ -4882,6 +4923,10 @@ def cmake_build(src, bdir, target, defs, vcvars, bat_name):
         fail("cmake / ninja not found after installing them", "run: .venv python -m pip install -r requirements-build.txt")
     conf = [cmake, "-G", "Ninja", f"-DCMAKE_MAKE_PROGRAM={ninja}", "-S", str(src), "-B", str(bdir),
             "-DCMAKE_BUILD_TYPE=Release", *defs]
+    if os.environ.get("CXX"):
+        conf.append(f"-DCMAKE_CXX_COMPILER={os.environ['CXX']}")
+    if os.environ.get("CUDAHOSTCXX"):
+        conf.append(f"-DCMAKE_CUDA_HOST_COMPILER={os.environ['CUDAHOSTCXX']}")
     build = [cmake, "--build", str(bdir), "--target", target, "-j", str(max(2, (os.cpu_count() or 4) // 2))]
     # A failed build is tried once more: CUDA 13.0's ptxas now and then fails to parse a PTX file it just wrote, and
     # the same command then gets past it (issue #45); a second attempt only compiles what is still missing.
@@ -4954,6 +4999,21 @@ def engine_defs(archs, toolkit=13) -> list:
     return ["-DSTRATA_EXPERIMENTAL_SM60=ON"] if min(int(x) for x in archs) < 75 or int(toolkit) == 12 else []
 
 
+def cuda12_glibc_compat_flags() -> list[str]:
+    """Avoid CUDA 12's noexcept clash with glibc's C23 math declarations on Linux host compilation."""
+    if WIN:
+        return []
+    libc, version = platform.libc_ver()
+    try:
+        ver = tuple(int(x) for x in version.split(".")[:2])
+    except (AttributeError, ValueError):
+        return []
+    if libc != "glibc" or ver < (2, 41):
+        return []
+    header = ROOT / "tools" / "cuda_glibc_compat.h"
+    return [f"-DCMAKE_CUDA_FLAGS=-Xcompiler=-include,{header}"]
+
+
 def prebuilt_vision(meta: dict, gpu: dict, vision: str) -> str:
     """The image encoder to use with a ready-made engine (`meta`: its BUILD.json).  The encoder can cover fewer cards
     than the engine (0.1.30/0.1.31: no RTX 20 code, #331): such a card gets the CPU encoder - the same program - instead
@@ -4985,6 +5045,7 @@ def build_engine(gpu, vision, yes, llama, toolkit=None) -> Path:
     local = meta.get("source") == "local"
     src, vsrc = source_hash(ENGINE_SOURCES), source_hash(VISION_SOURCES)
     archs = sorted({int(x) for x in gpu.get("archs", [gpu["arch"]])})    # every card the model runs on
+    glibc_compat = cuda12_glibc_compat_flags() if t12 else []
     built = {int(x) for x in meta.get("archs", [])}
     # a card the engine has no code for (a GPU added with --gpus, #128) needs a compile even when the source is the
     # same; the compile keeps the generations it was built for
@@ -5011,7 +5072,7 @@ def build_engine(gpu, vision, yes, llama, toolkit=None) -> Path:
                      f"-DCMAKE_CUDA_ARCHITECTURES={cuda_archs}",
                      f"-DCMAKE_CUDA_COMPILER={nvcc}", *toolkit_root_defs(nvcc), f"-DSTRATA_GGML_DIR={llama}",
                      *host_compiler_defs(True), *engine_defs(archs, toolkit),
-                     *isa_floor_defs(floor, bdir, meta)],
+                     *glibc_compat, *isa_floor_defs(floor, bdir, meta)],
                     vcvars, "build-strata-cuda12.bat" if t12 else "build-strata.bat")
         if stale_binary(bdir / EXE):                      # #2054: the stamp below is written only for a binary of this source
             fail(f"the engine build finished without a new engine ({EXE} is version {binary_engine_version(bdir / EXE)}, "
@@ -5027,8 +5088,9 @@ def build_engine(gpu, vision, yes, llama, toolkit=None) -> Path:
         defs = [f"-DLLAMA_DIR={llama}", f"-DSTRATA_VISION_CUDA={'ON' if vision == 'gpu' else 'OFF'}",
                 "-DSTRATA_PORTABLE=OFF", *host_compiler_defs(vision == "gpu")]   # native, like the engine
         if vision == "gpu":
-            defs += [f"-DCMAKE_CUDA_ARCHITECTURES={cuda_archs}", f"-DCMAKE_CUDA_COMPILER={nvcc}",
-                     *toolkit_root_defs(nvcc)]
+            defs += ["-DGGML_CUDA_NCCL=OFF", f"-DCMAKE_CUDA_ARCHITECTURES={cuda_archs}",
+                     f"-DCMAKE_CUDA_COMPILER={nvcc}", *toolkit_root_defs(nvcc)]
+            defs += glibc_compat
         cmake_build(ROOT / "tools" / "vision", vdir, "strata-vision", defs, vcvars,
                     "build-vision-cuda12.bat" if t12 else "build-vision.bat")
         shutil.copy2(vdir / "bin" / VEXE, eng / VEXE)
@@ -6608,7 +6670,8 @@ def use_cuda12(cards, cfg_path: Path, cfg: dict, yes: bool) -> dict:
     warn(f"sm_{old} is older than CUDA 13 supports (it dropped Pascal and Volta): this model moves to the experimental "
          "CUDA 12 engine (docs/OLDER_GPUS.md; START-HERE.bat --setup --cuda 13 and newer cards only moves it back)")
     main = gpu_info(cards[0]["index"]) or cards[0]
-    vision = "gpu" if cfg.get("vision") else "none"
+    vision_cfg = cfg.get("vision")
+    vision = ("gpu" if vision_cfg.get("gpu") else "cpu") if isinstance(vision_cfg, dict) else "none"
     eng = get_cuda12_engine(os.environ.get("STRATA_PREBUILT_URL", PREBUILT_URL),
                             {**main, "archs": sorted({int(g["arch"]) for g in cards})}, vision, yes)
     cfg["exe"] = str(eng / EXE)
@@ -6741,9 +6804,10 @@ def control_engine_step(gpu, vision):
     return llama, eng, meta, [], gpu, "none"
 
 
-def engine_step(a, gpu, hip, amd, cuda_tk, vision):
+def engine_step(a, gpu, hip, amd, cuda_tk, vision, fam=None):
     """Step 4: llama.cpp's sources and the engine (ready-made, or compiled here).  Returns (llama, engine folder, its
-    BUILD.json, its library folders, the GPU (AMD on Windows: as the engine sees it), the image-encoder choice)."""
+    BUILD.json, its library folders, the GPU (AMD on Windows: as the engine sees it), the image-encoder choice).
+    fam: the family dict; a family with requires_source_build (Uncensored) never takes a prebuilt engine."""
     if CONTROL:
         return control_engine_step(gpu, vision)
     llama = get_llama_cpp()
@@ -6757,8 +6821,8 @@ def engine_step(a, gpu, hip, amd, cuda_tk, vision):
         gpu = hip_card(eng, gpu, amd)
         a.gpu = gpu["index"] if gpu["count"] > 1 else a.gpu
     else:
-        eng = None if a.build or hip else get_prebuilt(a.prebuilt, gpu, vision, **({"toolkit": 12} if cuda_tk == 12
-                                                                                    else {}))
+        eng = None if a.build or hip or (fam or {}).get("requires_source_build") else get_prebuilt(
+            a.prebuilt, gpu, vision, **({"toolkit": 12} if cuda_tk == 12 else {}))
     if eng is not None and not hip and json.loads((eng / "BUILD.json").read_text(encoding="utf-8")).get("source") != "local":
         pip_cuda_libs(cuda_tk)
         if vision != "none" and not (eng / VEXE).exists():
@@ -6984,7 +7048,7 @@ def install_own_path(a, family, gpu, hip, amd, cuda_tk, multi, port, ram, adopte
                 "numpy, jinja2, regex, pyyaml, tqdm, requests, cmake, ninja, pillow, psutil")
 
     step(4, "the Strata engine")
-    llama, eng, meta, lib_dirs, gpu, vision = engine_step(a, gpu, hip, amd, cuda_tk, vision)
+    llama, eng, meta, lib_dirs, gpu, vision = engine_step(a, gpu, hip, amd, cuda_tk, vision, fam)
     reader = None
     if hip and vision != "none":
         vision, reader = hip_reader(eng, vision, gpu)
@@ -7335,8 +7399,9 @@ def main() -> int:
         return mac_setup(sys.argv[1:])
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--family", choices=list(FAMILIES) + list(PREVIEW_FAMILIES),
-                    help="qwen = Qwen3.8-Flash-Next, swift = Swift 1.5, qwen36 = Qwen3.6-35B-A3B (pictures with --vision, "
-                         "several requests at once with --parallel; docs/QWEN36.md)")
+                    help="qwen = Qwen3.8-Flash-Next, swift = Swift 1.5, uncensored = Q4_K_M or Q5_K_M, "
+                         "qwen36 = Qwen3.6-35B-A3B (pictures with --vision, several requests at once with "
+                         "--parallel; docs/QWEN36.md)")
     ap.add_argument("--model", choices=list(dict.fromkeys([*MODELS, *(m for f in PREVIEW_FAMILIES.values()
                                                                        for m in f["models"])])))
     ap.add_argument("--context", type=int)
@@ -7968,6 +8033,9 @@ def main() -> int:
         kv = ["int8", "q4_0"][int(ask("KV cache?", ["1", "2"], "1", a.yes)) - 1]
     if ctx > 8192:
         ok(f"KV cache: {'8-bit' if kv == 'int8' else '4-bit (Hadamard-rotated)'}")
+    if hip and fam.get("cuda_only"):
+        fail(f"{fam['title']} currently requires the NVIDIA CUDA backend",
+             "use an NVIDIA RTX 20 series or newer card")
     if MODELS[model].get("vision", fam.get("vision")) is False:     # UD-IQ4_XS: images, unlike UD-Q4_K_XL
         vision = "none"
         if a.vision not in (None, "no", "none"):
@@ -8118,7 +8186,7 @@ def main() -> int:
 
     # ---- 4. the engine
     step(4, "the Strata engine")
-    llama, eng, meta, lib_dirs, gpu, vision = engine_step(a, gpu, hip, amd, cuda_tk, vision)
+    llama, eng, meta, lib_dirs, gpu, vision = engine_step(a, gpu, hip, amd, cuda_tk, vision, fam)
     reader = None
     if hip and vision != "none":                       # AMD: the engine folder's reader (GPU, else CPU), settled now the engine is known
         vision, reader = hip_reader(eng, vision, gpu)
@@ -8183,9 +8251,7 @@ def main() -> int:
     if not mmproj.exists():                            # an earlier install's copy (the same file for every family)
         mmproj = find_in(roots, f"models/{fam['mmproj']}") or mmproj
     if vision != "none":
-        if not mmproj.exists() and a.gguf_dir and (Path(a.gguf_dir) / fam["mmproj"]).exists():
-            mmproj = Path(a.gguf_dir) / fam["mmproj"]
-        else:
+        if not mmproj.exists():
             download(fam["mmproj_hf"] + fam["mmproj"], mmproj, "vision encoder")
         if fam.get("mmproj_sha256"):                   # the NVFP4 family pins it by size and SHA-256 too
             verify_sha256(mmproj, *fam["mmproj_sha256"])
@@ -8198,6 +8264,7 @@ def main() -> int:
     step(6, "preparing the model for Strata")
     pack = find_in(roots, f"packs/{tag.lower()}") or data / "packs" / tag.lower()
     env = dict(os.environ, STRATA_GGUF_PY=str(llama / "gguf-py"))
+    pack_args = (["--compat-bf16"] if fam.get("compat_bf16") else []) + fam.get("pack_args", [])
     prepared = bool(ready and MODELS[model].get("prepare"))
     if prepared and not prepared_done(model, models_dir):
         say("  NVIDIA's checkpoint is turned into a Strata pack on this PC (once; 20-40 minutes, reads the 102 GB, writes about")
@@ -8221,14 +8288,15 @@ def main() -> int:
             run([sys.executable, str(ROOT / "tools" / "strata_tokenizer.py"), "--gguf", str(shards[0]),
                  "--out", str(pack)], env=env)   # writes <pack>/tokenizer/
     elif not (pack / "native_experts.txt").exists() or not (pack / "tokenizer" / "vocab.json").exists():
-        # every tensor as the GGUF stores it; the experts are read from the GGUF at start (seconds to build)
-        # (UD-Q4_K_XL: --compat-bf16 - its Q8_0 hyper-connection projections become BF16, the form the engine reads)
+        # every tensor as the GGUF stores it; the experts are read from the GGUF at start (seconds to build).  A family
+        # in an ordinary quant (the Uncensored release's Q4_K_M) ships its small projections quantized too, and the
+        # pack rounds those few to BF16 - the form the residual, router, GDN and PLE kernels read (docs/ORCA.md)
         run([sys.executable, str(ROOT / "tools" / "iq_pack.py"), "--gguf", str(shards[0]), "--out", str(pack),
-             *fam.get("pack_args", [])], env=env)
+             *pack_args], env=env)
     if low_ram and not ready and not (pack / "experts.bin").exists():
         say(f"  Writing the experts into one file for the low-RAM mode (one time, {MODELS[model]['arena_gb']:.0f} GB) ...")
         run([sys.executable, str(ROOT / "tools" / "iq_pack.py"), "--gguf", str(shards[0]), "--out", str(pack),
-             "--experts-bin", *fam.get("pack_args", [])], env=env)       # #3193: Gyro needs --compat-bf16 here too
+             "--experts-bin", *pack_args], env=env)   # #3193: pack_args carries the family's pack flags (--compat-bf16 for Gyro)
     ok(f"model prepared: {pack}")
     mtp = ready_paths(model, models_dir)["mtp"] if prepared else \
         (find_in(roots, "mtp/rt/experts.bin") or data / "mtp/rt/experts.bin").parent.parent

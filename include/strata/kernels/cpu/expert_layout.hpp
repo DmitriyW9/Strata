@@ -23,10 +23,9 @@ struct ExpertLayout {
     /// Plan v0.3 P6: per layer, the absolute offsets of the gate / up / down tensors in their GGUF files, so the
     /// arena can be filled from the GGUF itself when the pack has no experts.bin (3 x n_layers, 0 = unknown).
     std::vector<uint64_t> gguf_off;
-    /// Per layer PER ROLE (3 x n_layers, `3 * layer + role`, matching `gguf_off`), the GGUF file - a name beside
-    /// the --native shard - that holds that role's tensor.  Empty = the --native shard itself.  Per role because a
-    /// shard boundary can fall inside a layer: Unsloth's UD-Q4_K_XL has layer 11's down in shard 2 and its gate
-    /// and up in shard 3 (native_experts.txt v4, the `gate,up,down` shard column).
+    /// Per layer and role (gate, up, down), the GGUF file beside --native that holds the tensor.
+    /// v3 stores one filename for all roles; v4 stores one filename per role when a shard boundary
+    /// falls inside a layer. Empty = the --native shard itself.
     std::vector<std::string> gguf_file;
     int version = 0;                      ///< native_experts.txt's header version (0 = none given)
     uint64_t max_blob = BLOB;

@@ -458,7 +458,30 @@ int selftest(const std::string& dir, uint32_t rb) {
         CHECK(rd.snapshot().keepalive_reads == 0, "keep-alive without the worker thread");
     }
     std::filesystem::remove(path);
-    std::printf("ple_reader selftest (row_bytes=%u): %s\n", rb, g_fail ? "FAILED" : "OK");
+    for (const uint32_t q5_row_bytes : {k::PLE_Q5_0_ROW_BYTES, k::PLE_Q5_1_ROW_BYTES}) {
+        constexpr uint32_t Q5_ROWS = 5000;
+        const std::string q5_path = dir + "/ple_reader_q5_selftest_" + std::to_string(q5_row_bytes) + ".bin";
+        if (!make_table(q5_path, Q5_ROWS, q5_row_bytes)) {
+            std::fprintf(stderr, "cannot write %s\n", q5_path.c_str());
+            return 2;
+        }
+        ng::PleReader rd;
+        std::string err;
+        CHECK(rd.open(q5_path, HEADER, Q5_ROWS, 16, 256, err, true, q5_row_bytes), "Q5 row-size open: %s",
+              err.c_str());
+        std::vector<uint32_t> rows{0, 1, 17, 102, Q5_ROWS - 1, Q5_ROWS, 0xFFFFFFFFu};
+        check_rows(rd, rows, Q5_ROWS, q5_row_bytes, "Q5 row-size");
+        std::vector<uint32_t> straddles;
+        for (uint32_t r = 0; r < Q5_ROWS && straddles.size() < 32; ++r) {
+            const uint64_t at = HEADER + (uint64_t) r * q5_row_bytes;
+            if (at / ng::PAGE != (at + q5_row_bytes - 1) / ng::PAGE) straddles.push_back(r);
+        }
+        check_rows(rd, straddles, Q5_ROWS, q5_row_bytes, "Q5 straddles");
+        CHECK(rd.cache_size() <= rd.cache_capacity(), "Q5 row cache exceeded its bound");
+        rd.close();
+        std::filesystem::remove(q5_path);
+    }
+    std::printf("ple_reader selftest: %s\n", g_fail ? "FAILED" : "OK");
     return g_fail ? 1 : 0;
 }
 

@@ -5,9 +5,9 @@
 //   * `ngram_rows` - the HOST hash.  Sixteen row indices per token from the last three token ids, computed
 //     with 64-bit multiply/xor and no tensor op at all.  `qwen4exp.cpp` L1092-1124, where the source says
 //     outright that it is host-side because "ggml has no int64 and no xor".
-//   * `PleTable`  - the row gather.  `per_layer_token_embd.weight` is IQ4_NL and is NOT IN THE PACK: it is
-//     51.2e9 elements (28.8 GB) in the ORIGINAL second GGUF shard, and it is the only tensor this engine
-//     reads from the GGUF rather than from the canonical pack.
+//   * `PleTable`  - the row gather. `per_layer_token_embd.weight` is not in the pack: it stays in its model GGUF
+//     shard and is read on demand. The original release stores it as IQ4_NL; Uncensored Q4_K_M uses Q5_0 and
+//     Q5_K_M uses Q5_1.
 //
 // THE HASH IS THE ONE PLACE IN THIS MODEL WHERE A WRONG BIT IS SILENTLY PLAUSIBLE.  Every one of its
 // properties has a rival reading that produces a valid index in range:
@@ -41,12 +41,13 @@ inline constexpr int NG_HIST = (PLE_CONV_KERNEL - 1) * NGRAM_SIZE;       // 9
 inline constexpr int32_t TOKEN_NULL = -1;       // LLAMA_TOKEN_NULL
 inline constexpr float NG_RMS_EPS = 1e-6f;
 
-// The table: [160, 320001536] IQ4_NL.  ne0 = 160 is the FAST axis, so one row is 160 contiguous elements =
-// 5 blocks of 32 at 18 bytes = 90 bytes.  The head-slowest flatten then makes 16 rows exactly n_embd = 2560.
+// The table is [160, 320001536]. ne0 = 160 is the FAST axis, so one row is 5 quant blocks.
+// IQ4_NL uses 90 bytes, Q5_0 110, Q5_1 120, FP8 E4M3 160, Q8_0 170, and BF16 320 bytes per row.
 inline constexpr uint64_t PLE_TABLE_ROWS = 320001536ull;
-inline constexpr int PLE_ROW_BYTES = (PLE_HEAD_DIM / 32) * 18;           // 90: an IQ4_NL row
+inline constexpr int PLE_ROW_BYTES = (PLE_HEAD_DIM / 32) * 18;           // IQ4_NL: 90
+inline constexpr int PLE_Q5_0_ROW_BYTES = (PLE_HEAD_DIM / 32) * 22;      // Q5_0: 110
+inline constexpr int PLE_Q5_1_ROW_BYTES = (PLE_HEAD_DIM / 32) * 24;      // Q5_1: 120
 inline constexpr int PLE_ROW_BYTES_FP8 = PLE_HEAD_DIM;                   // 160: an F8_E4M3 row, one byte a value
-inline constexpr int PLE_ROW_BYTES_Q5_1 = (PLE_HEAD_DIM / 32) * 24;     // 120: a Q5_1 row (a Q5_K_M finetune)
 inline constexpr int PLE_ROW_BYTES_Q8_0 = (PLE_HEAD_DIM / 32) * 34;     // 170: a Q8_0 row (UD-Q6_K_XL, Swift-1.5 Q4_K_L)
 inline constexpr int PLE_ROW_BYTES_BF16 = PLE_HEAD_DIM * 2;             // 320: a BF16 row, two bytes a value
 inline constexpr int PLE_ROW_BYTES_NVFP4 = PLE_HEAD_DIM / 2 + PLE_HEAD_DIM / 16;   // 90: 80 B of E2M1 codes + 10 E4M3 block scales
@@ -74,7 +75,7 @@ const PleFormatInfo& ple_format_info(PleFormat f);
 /// The format whose table tensor has this GGUF type name, or nullptr. F8_E4M3's name is "I8"; the caller checks the
 /// `strata.ple.format` marker and the scale.
 const PleFormatInfo* ple_format_for_type(const char* gguf_type_name);
-/// "IQ4_NL, Q5_0 or FP8 (I8)": the formats for an error message, built from the list.
+/// The accepted table formats for an error message, built from the format list.
 std::string ple_format_list();
 
 /// The artifact's own hash constants, transcribed from `docs/gguf-dump-shard1.txt`:
@@ -191,18 +192,16 @@ public:
     /// Fault injection (Direct mode): every row read completes no earlier than `us` after issue.
     void set_injected_delay_us(double us);
 
-    /// Maps the ORIGINAL second GGUF shard read-only.  The tensor's data does NOT start at file offset 0:
-    /// the manifest's `shard2_tensor.offset` is relative to the GGUF's DATA SECTION, and the header before it
-    /// is 192 bytes.  Reading at 0 would silently decode the header plus 192 bytes of shifted rows - still
-    /// plausible IQ4_NL, which is why the reader takes the offset from a real GGUF parse (`GgufFile`, the
-    /// project's validated reader) and checks that the tensor exactly fills the rest of the file.
+    /// Maps the GGUF shard containing the table read-only. The tensor's data does NOT start at file offset 0:
+    /// its offset is relative to the GGUF's DATA SECTION. Reading at 0 would decode the header plus shifted rows,
+    /// which is why the reader takes the offset from a real GGUF parse (`GgufFile`) and validates its bounds.
     bool open(const std::string& gguf_path, std::string& err);
     void close();
     bool is_open() const;
     /// True when `PleIoOptions::lock` was asked for and the OS lock succeeded (false: pages only pre-touched).
     bool locked() const;
     uint64_t rows() const;
-    /// "IQ4_NL" or "F8_E4M3" (a GGUF from tools/ple_fp8_pack.py: type I8, strata.ple.format = f8_e4m3).
+    /// "IQ4_NL", "Q5_0", or "F8_E4M3" (the packed table is type I8 with strata.ple.format = f8_e4m3).
     const char* format() const;
 
     /// 16 row indices -> 2560 floats.  The gathered rows are flattened HEAD-SLOWEST: row h's 160 values

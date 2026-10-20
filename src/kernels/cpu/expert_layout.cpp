@@ -456,11 +456,16 @@ bool expert_layout_load(const std::string& pack_dir, int64_t n_layers, int64_t n
                 // comma, so the split is unambiguous; an engine older than v4 fails to open such a "file" loudly.
                 // The comma form is from #255 (gopinath87607).
                 std::vector<std::string> parts;
-                for (size_t from = 0;;) {
-                    const size_t comma = file.find(',', from);
-                    parts.push_back(file.substr(from, comma == std::string::npos ? comma : comma - from));
-                    if (comma == std::string::npos) break;
-                    from = comma + 1;
+                if (file.find(',') != std::string::npos) {
+                    for (size_t from = 0;;) {
+                        const size_t comma = file.find(',', from);
+                        parts.push_back(file.substr(from, comma == std::string::npos ? comma : comma - from));
+                        if (comma == std::string::npos) break;
+                        from = comma + 1;
+                    }
+                } else {
+                    parts.push_back(file);
+                    for (std::string name; ss >> name;) parts.push_back(name);
                 }
                 if (parts.size() == 1) {
                     const std::string one = parts[0];   // not parts.assign(3, parts[0]): that aliases the element
@@ -472,7 +477,8 @@ bool expert_layout_load(const std::string& pack_dir, int64_t n_layers, int64_t n
                           "gate,up,down, not: " + line;
                     return false;
                 }
-                for (size_t r = 0; r < 3; ++r) L.gguf_file[(size_t) (3 * l) + r] = parts[r];
+                for (size_t r = 0; r < 3; ++r)
+                    L.gguf_file[(size_t) (3 * l) + r] = parts[r] == "-" ? std::string() : parts[r];
             }
         }
         L.fmt[(size_t) l] = f;
