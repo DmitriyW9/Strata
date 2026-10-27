@@ -2,7 +2,6 @@
 #include "strata/core/peer_experts.hpp"
 
 #include "strata/core/device.hpp"   // primary_device() (STRATA_PRIMARY_DEVICE)
-#include "strata/core/remote_expert_opt.hpp"   // real EP: metadata_bytes()/prepare()/reduce() on the reduce path
 #include "strata/kernels/cpu/expert_layout.hpp"
 #include "strata/kernels/cpu/hadamard.hpp"
 #include "strata/kernels/elementwise.hpp"
@@ -172,22 +171,16 @@ bool PeerExperts::open(int device, const std::vector<std::pair<int32_t, int32_t>
         for (const auto& f : lay.fmt) ff = std::max<int64_t>(ff, f.n_ff);
     const size_t scratch = std::max<size_t>((size_t) strata::kernels::moe_hit_grouped_scratch_bytes(CAP, H, ff),
                                             strata::kernels::native_expert_scratch_bytes(CAP, ff));
-    // 0.1.52 real EP: with an opt tier attached, the reduce metadata (row/weight per entry) rides the same
-    // staging block right after Meta, exactly as RemoteExperts does, so launch() can hand the peer's share to
-    // RemoteExpertOpt::reduce() and fold it into a per-token weighted sum instead of scattering full rows.
-    const size_t opt_bytes = remote_opt_ ? remote_opt_->metadata_bytes() : 0;
-    const size_t meta_bytes = sizeof(Meta) + opt_bytes;
-    owned_.resize(CAP);
     const bool alloc_ok =
         ck(cudaStreamCreateWithFlags(&stream_, cudaStreamNonBlocking), "stream", err) &&
         ck(cudaStreamCreateWithFlags(&refill_, cudaStreamNonBlocking), "refill stream", err) &&
         ck(cudaEventCreateWithFlags(&refill_ev_, cudaEventDisableTiming), "event", err) &&
         ck(cudaHostAlloc((void**) &h_x_, (size_t) CAP * H * sizeof(float), cudaHostAllocPortable | cudaHostAllocMapped), "input staging", err) &&
         ck(cudaHostAlloc((void**) &h_out_, (size_t) CAP * H * sizeof(float), cudaHostAllocPortable | cudaHostAllocMapped), "result staging", err) &&
-        ck(cudaHostAlloc(&h_meta_, meta_bytes, cudaHostAllocPortable | cudaHostAllocMapped), "plan staging", err) &&
+        ck(cudaHostAlloc(&h_meta_, sizeof(Meta), cudaHostAllocPortable | cudaHostAllocMapped), "plan staging", err) &&
         ck(cudaMalloc((void**) &d_x_, (size_t) CAP * H * sizeof(float)), "input", err) &&
         ck(cudaMalloc((void**) &d_out_, (size_t) CAP * H * sizeof(float)), "result", err) &&
-        ck(cudaMalloc(&d_meta_, meta_bytes), "plan", err) &&
+        ck(cudaMalloc(&d_meta_, sizeof(Meta)), "plan", err) &&
         ck(cudaMalloc((void**) &d_q8_, (size_t) CAP * (H / 32) * 36), "activations", err) &&
         ck(cudaMalloc(&d_scratch_, scratch), "scratch", err);
     if (!alloc_ok) { close(); return false; }
@@ -254,18 +247,12 @@ bool PeerExperts::open(int device, const std::vector<std::pair<int32_t, int32_t>
 bool PeerExperts::launch(int64_t layer, const float* x, const int32_t* ids, int64_t n_tok, int64_t k,
                          const int32_t* kind, std::string& err, float* out) {
     static const bool direct_env = [] { const char* v = std::getenv("STRATA_PEER_DIRECT"); return v == nullptr || std::atoi(v) != 0; }();
-    // real EP on a layer split: with an opt tier bracketing the verify window, fold this card's share into a
-    // per-token weighted partial sum instead of scattering full rows. Same dispatch, reduce instead of scatter.
-    const bool ep = opt_active();
-    const bool direct = !ep && direct_env && out != nullptr;
+    const bool direct = direct_env && out != nullptr;
     launched_direct_ = false;
     launched_rows_ = 0;
     row_of_.clear();
     const int64_t n = n_tok * k;
     if (n > CAP) { err = "peer experts: window too large"; return false; }
-    launched_tokens_ = n_tok;
-    launched_k_ = k;
-    if (ep) std::fill(owned_.begin(), owned_.begin() + n, 0);
     Meta& m = *(Meta*) h_meta_;
     int groups = 0, rows = 0;
     // distinct experts in routing order; each one's entries become compact rows
@@ -285,7 +272,6 @@ bool PeerExperts::launch(int64_t layer, const float* x, const int32_t* ids, int6
                 m.tok[rows] = (int32_t) (j / k);
                 m.out_row[rows] = (int32_t) j;
                 row_of_.push_back((int32_t) j);
-                owned_[(size_t) j] = 1;   // real EP: mark this entry as peer-computed so the verifier skips its row
                 ++rows;
             }
         ++groups;
@@ -297,14 +283,12 @@ bool PeerExperts::launch(int64_t layer, const float* x, const int32_t* ids, int6
     m.count[1] = rows;
     entries_ += rows;
     launched_rows_ = rows;
-    // direct/ep: x is the verifier's pinned (portable) doorbell row block - copied from where it is
-    if (!direct && !ep) std::memcpy(h_x_, x, (size_t) (n_tok * H) * sizeof(float));
-    if (ep) remote_opt_->prepare(*this, (Meta*) h_meta_ + 1);   // stage row/weight right after Meta
+    // direct: x is the verifier's pinned (portable) doorbell row block - copied from where it is
+    if (!direct) std::memcpy(h_x_, x, (size_t) (n_tok * H) * sizeof(float));
     On on(device_);
     const cudaStream_t s = stream_;
-    const size_t mbytes = sizeof(Meta) + (ep ? remote_opt_->metadata_bytes() : 0);
-    if (!ck(cudaMemcpyAsync(d_x_, (direct || ep) ? x : h_x_, (size_t) (n_tok * H) * sizeof(float), cudaMemcpyHostToDevice, s), "input", err) ||
-        !ck(cudaMemcpyAsync(d_meta_, h_meta_, mbytes, cudaMemcpyHostToDevice, s), "plan", err))
+    if (!ck(cudaMemcpyAsync(d_x_, direct ? x : h_x_, (size_t) (n_tok * H) * sizeof(float), cudaMemcpyHostToDevice, s), "input", err) ||
+        !ck(cudaMemcpyAsync(d_meta_, h_meta_, sizeof(Meta), cudaMemcpyHostToDevice, s), "plan", err))
         return false;
     Meta* dm = (Meta*) d_meta_;
     const auto& lay = strata::kernels::cpu::expert_layout();
@@ -321,7 +305,6 @@ bool PeerExperts::launch(int64_t layer, const float* x, const int32_t* ids, int6
         err = "peer experts: only native packs are supported";
         return false;
     }
-    if (ep) return remote_opt_->reduce(*this, (Meta*) d_meta_ + 1, err);   // fold compact rows -> per-token sum -> h_out_
     if (direct) {   // the rows straight into the host `out` (zero-copy, coalesced float4 writes)
         try {
             strata::kernels::scatter_rows_f32(d_out_, out, dm->out_row, rows, H, s);
@@ -345,7 +328,6 @@ bool PeerExperts::finish(float* out, std::string& err) {
         if (!ck(e, "finish", err)) return false;
     }
     ms_wait += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
-    if (remote_opt_ && remote_opt_->active()) { remote_opt_->accumulate(*this); launched_rows_ = 0; return true; }
     if (launched_direct_) { launched_rows_ = 0; return true; }
     for (size_t r = 0; r < row_of_.size(); ++r)
         std::memcpy(out + (size_t) row_of_[r] * H, h_out_ + r * H, (size_t) H * sizeof(float));

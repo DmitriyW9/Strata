@@ -32,8 +32,6 @@ namespace strata::core {
 void set_peer_portable(bool on);
 bool peer_portable();
 
-class RemoteExpertOpt;   // remote_expert_opt.hpp; peer_experts.hpp is included by remote_expert_opt.cu
-
 class PeerExperts {
 public:
     PeerExperts() = default;
@@ -75,17 +73,6 @@ public:
     bool adapt(const float* usage, const int32_t* res0, int max_swaps, std::string& err);
     void apply_pending(bool wait);
 
-    /// 0.1.52 (real EP on a layer split): when a RemoteExpertOpt is attached and active, the peer's share of a
-    /// layer is folded into one per-token weighted partial sum (reduce) rather than scattered as full rows, so
-    /// both cards compute routed experts of the SAME stage-0 layer at once. See remote_expert_opt.hpp.
-    void set_opt(RemoteExpertOpt* opt) { remote_opt_ = opt; }
-    bool optimized_decode() const { return remote_opt_ != nullptr; }
-    /// True when the attached RemoteExpertOpt is currently bracketing a verify window (its weights_ is set).
-    /// Defined out of line: the active test reads RemoteExpertOpt's private state (friend).
-    bool opt_active() const;
-    /// The peer card's kernel stream, so the reduce path can be ordered against it.
-    cudaStream_t stream() const { return stream_; }
-
     int64_t resident() const { return resident_; }
     /// the last launch writes its rows into the host rows itself (the caller must not touch them)
     bool launched_direct() const { return launched_direct_; }
@@ -96,7 +83,6 @@ public:
     double ms_wait = 0;                               ///< host time spent in finish() waiting for the peer
 
 private:
-    friend class RemoteExpertOpt;
     int device_ = -1;
     bool p2p_ = false;
     int64_t n_layers_ = 0, n_expert_ = 0;
@@ -117,12 +103,6 @@ private:
     std::vector<int32_t> row_of_;                     ///< compact row -> original entry
     int64_t launched_rows_ = 0;
     bool launched_direct_ = false;
-    /// 0.1.52 real EP: when set (by attach()), launch/finish use the weighted partial-sum reduce path instead of
-    /// scattering full rows. owned_[entry] = 1 marks entries this peer computed (for h_mask_ OR in accumulate()).
-    RemoteExpertOpt* remote_opt_ = nullptr;
-    std::vector<uint8_t> owned_;                      ///< [n_tok*k] -> 1 if this peer computed the entry
-    int64_t launched_tokens_ = 0;                     ///< tokens in the last launch (reduce: one sum per token)
-    int64_t launched_k_ = 0;                          ///< k in the last launch
 };
 
 }  // namespace strata::core

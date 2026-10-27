@@ -9051,6 +9051,9 @@ def main(argv=None, *, lifecycle_event=None, interrupt_exit_code: int = 0) -> in
     if set(key_list(svc.api_key)) & set(key_list(svc.telemetry_key)):
         print("[strata] telemetry_read_key must differ from every inference API key", file=sys.stderr)
         return 2
+    if not svc.api_key and "api_key" in cfg and not no_key_chosen:             # #569: written, but empty: the server has none (a warning, not a stop)
+        print("[strata] the api_key in the config is empty: this server has no API key (anyone who can reach it can "
+              "use it); set one, or leave api_key out", file=sys.stderr, flush=True)
     svc.cors_origins = origins_of(cfg.get("cors_origins"), "cors_origins", wildcard=True)
     svc.trusted_origins = origins_of(cfg.get("trusted_origins"), "trusted_origins", wildcard=False)
     try:
@@ -9179,6 +9182,9 @@ def main(argv=None, *, lifecycle_event=None, interrupt_exit_code: int = 0) -> in
         if not ips:
             address = "[<this PC's IPv6 address>]" if a.host == "::" else "<this PC's IP address>"
             print(f"       from other devices: http://{address}:{bound_port}/", flush=True)
+        if not svc.api_key:
+            print("       WARNING: " + open_server_warning(bound_port, tools=svc.mcp is not None),
+                  flush=True)
         if os.name == "nt":
             print("       nothing arrives? Windows Firewall blocks it until allowed: accept its prompt for Python, or run "
                   "in an admin PowerShell:\n         New-NetFirewallRule -DisplayName \"Strata " + str(bound_port) + "\" "

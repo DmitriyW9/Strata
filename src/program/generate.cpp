@@ -3932,18 +3932,12 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "strata generate: --remote-expert-opt requires --serve\n");
         return 2;
     }
-    // 0.1.52: a layer split is no longer exclusive with --peer-device. With --remote-expert-opt, the second card's
-    // expert tier becomes an EP tier for the stage-0 layers it holds: both cards compute routed experts of the same
-    // layer and their partial sums are folded by the reduce path (real expert parallelism). A remote expert *cache*
-    // is still exclusive, since the peer tier already caches experts on its own card.
-    if (o.peer_device >= 1 && o.expert_cache_remote[0] > 0) {
-        std::fprintf(stderr, "strata generate: --peer-device cannot be combined with --expert-cache-device1..3 "
-                             "(the peer tier already caches experts there)\n");
-        return 2;
-    }
-    if (o.peer_device >= 1 && !o.layer_split.empty() && !o.remote_expert_opt) {
-        std::fprintf(stderr, "strata generate: --peer-device with --layer-split needs --remote-expert-opt "
-                             "(the split's second card is an expert-parallel tier)\n");
+    // the peer tier is the second card's only user: a layer split or a remote expert cache would put a second engine
+    // part (and a second copy of the same experts) on it
+    if (o.peer_device >= 1 && (!o.layer_split.empty() || o.expert_cache_remote[0] > 0)) {
+        std::fprintf(stderr, "strata generate: --peer-device cannot be combined with %s\n",
+                     !o.layer_split.empty() ? "--layer-split (use one or the other)"
+                                            : "--expert-cache-device1..3 (the peer tier already caches experts there)");
         return 2;
     }
 
@@ -7544,11 +7538,7 @@ int main(int argc, char** argv) {
 
     std::array<strata::core::RemoteExperts, 3> remote_experts;
     std::unique_ptr<strata::core::RemoteExpertOpt> remote_opt;
-    // real EP (0.1.52): a layer split's second card is an expert tier too, so the opt path is created for it as
-    // well, not only for helper caches on layers no stage runs.
-    const bool split_ep = !stages.empty() && o.peer_device >= 1;
-    if (o.remote_expert_opt && (o.expert_cache_remote[0] > 0 || split_ep))
-        remote_opt = std::make_unique<strata::core::RemoteExpertOpt>();
+    if (o.remote_expert_opt && o.expert_cache_remote[0] > 0) remote_opt = std::make_unique<strata::core::RemoteExpertOpt>();
     const bool multi_remote = o.expert_cache_remote[1] > 0 || o.expert_cache_remote[2] > 0;
     if (o.expert_cache_remote[0] > 0) {
         if (o.expert_cache <= 0 || profile.empty() || o.no_pool) {
@@ -7642,7 +7632,6 @@ int main(int argc, char** argv) {
             return 1;
         }
         const auto tp0 = Clock::now();
-        if (remote_opt) remote_opt->attach(peer);   // real EP on a layer split: fold the peer's share with reduce()
         if (!peer.open(o.peer_device, profile, xcache, *srcp, g.n_layers, g.n_expert, o.peer_reserve_mib, o.peer_slots,
                        err)) {
             std::fprintf(stderr, "strata generate: %s\n", err.c_str());

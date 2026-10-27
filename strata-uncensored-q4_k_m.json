@@ -30,9 +30,7 @@
   "700",
   "--vram-reserve-later-mib",
   "952",
-  "--remote-expert-opt",
-  "--peer-device",
-  "1"
+  "--remote-expert-opt"
  ],
  "cwd": "/home/dmitriy/projects/ai/LLM/Strata",
  "tokenizer": "/home/dmitriy/projects/ai/LLM/Strata-data/packs/uncensored-q4_k_m/tokenizer",
@@ -42,7 +40,7 @@
   "/usr/local/cuda-12.9/bin",
   "/usr/local/cuda-12.9/lib64"
  ],
- "host": "0.0.0.0",
+ "host": "127.0.0.1",
  "port": 8080,
  "cuda": 12,
  "env": {
