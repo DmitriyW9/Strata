@@ -56,9 +56,11 @@ def normalize(v, t: Path):
     if isinstance(v, list):
         return [normalize(x, t) for x in v]
     if isinstance(v, str):
-        normalized = v.replace(str(t), "<T>").replace("\\", "/")
-        normalized = normalized.replace(f"/engine/{setup.EXE}", "/engine/<EXE>")
-        return re.sub(rf"(?<![w.-]){re.escape(setup.EXE)}(?![w.-])", "<EXE>", normalized)
+        v = v.replace(str(t), "<T>").replace("\\", "/")
+        # the platform's own names of the programs (strata.exe or strata, strata-vision.exe or strata-vision, ...) so the baseline compares on Windows and Linux (#3325)
+        for name, label in ((setup.HVEXE, "<HVEXE>"), (setup.VEXE, "<VEXE>"), (setup.EXE, "<EXE>")):
+            v = re.sub(rf"(?<![w.-]){re.escape(name)}(?![w.-])", label, v)   # #973: only the whole name, not "strata-x.log" on Linux
+        return v
     return v
 
 

@@ -1,6 +1,3 @@
 {
- "reasoning_effort": "low",
- "temperature": 0.95,
- "top_p": 0.95,
- "top_k": 20
+ "reasoning_effort": "medium"
 }
