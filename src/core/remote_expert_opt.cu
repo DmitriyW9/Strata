@@ -1,5 +1,6 @@
 #include "strata/core/remote_expert_opt.hpp"
 #include "strata/core/remote_experts.hpp"
+#include "strata/core/peer_experts.hpp"
 #include "strata/core/on_device.hpp"
 #include "strata/kernels/cpu/expert_layout.hpp"
 #include "strata/kernels/elementwise.hpp"
@@ -53,6 +54,11 @@ void RemoteExpertOpt::attach(RemoteExperts& remote) {
     peers_.push_back({&remote});
 }
 
+void RemoteExpertOpt::attach(PeerExperts& peer) {
+    peer.set_opt(this);
+    ppeers_.push_back({&peer});
+}
+
 bool RemoteExpertOpt::init(std::string& err) {
     void* mapped = nullptr;
     if (!check(cudaHostAlloc((void**) &h_sum_, MAXT * (H + K) * sizeof(float),
@@ -65,6 +71,10 @@ bool RemoteExpertOpt::init(std::string& err) {
         const OnDevice on(p.remote->device_);
         if (!check(cudaMalloc((void**) &p.sum, MAXT * H * sizeof(float)), err)) return false;
     }
+    for (auto& p : ppeers_) {
+        const OnDevice on(p.peer->device());
+        if (!check(cudaMalloc((void**) &p.sum, MAXT * H * sizeof(float)), err)) return false;
+    }
     return true;
 }
 
@@ -74,6 +84,13 @@ RemoteExpertOpt::~RemoteExpertOpt() {
         if (p.remote->stream_) cudaStreamSynchronize(p.remote->stream_);
         if (p.sum) cudaFree(p.sum);
         p.remote->remote_opt_ = nullptr;
+    }
+    // ~PeerExperts ran first (it is declared after the unique_ptr in generate.cpp), so its stream
+    // is already torn down and any in-flight kernels completed. Free our own device buffer here.
+    for (auto& p : ppeers_) {
+        const OnDevice on(p.peer->device());
+        if (p.sum) cudaFree(p.sum);
+        p.peer->set_opt(nullptr);
     }
     if (h_sum_) cudaFreeHost(h_sum_);
 }
@@ -131,9 +148,47 @@ void RemoteExpertOpt::combine(float* dst, float* scratch, int token_begin, int t
     strata::kernels::add_inplace(dst, sum, tokens * H, stream);
 }
 
+bool PeerExperts::opt_active() const { return remote_opt_ != nullptr && remote_opt_->active(); }
+
+void RemoteExpertOpt::prepare(const PeerExperts& peer, void* metadata) const {
+    auto* m = (ReduceMeta*) metadata;
+    std::fill(m->row, m->row + tokens_ * K, -1);
+    for (size_t r = 0; r < peer.row_of_.size(); ++r)
+        m->row[peer.row_of_[r]] = (int32_t) r;   // compact row r -> the entry it computes
+    std::memcpy(m->weight, weights_, tokens_ * K * sizeof(float));
+}
+
+bool RemoteExpertOpt::reduce(PeerExperts& peer, const void* metadata, std::string& err) {
+    const auto& p = *std::find_if(ppeers_.begin(), ppeers_.end(),
+                                  [&](const PeerTier& p) { return p.peer == &peer; });
+    // the grouped expert kernels wrote their compact rows to peer.d_out_; fold them, weighted, into one row
+    // per token in p.sum (this class's device buffer), then back to the peer's pinned h_out_ for accumulate().
+    reduce_experts<<<dim3((H + 255) / 256, tokens_), 256, 0, peer.stream_>>>(
+        peer.d_out_, (const ReduceMeta*) metadata, p.sum);
+    if (auto e = cudaGetLastError(); e != cudaSuccess) {
+        err = std::string("peer expert reduce: ") + cudaGetErrorString(e);
+        return false;
+    }
+    const size_t bytes = (size_t) tokens_ * H * sizeof(float);
+    if (auto e = cudaMemcpyAsync(peer.h_out_, p.sum, bytes, cudaMemcpyDeviceToHost, peer.stream_);
+        e != cudaSuccess) {
+        err = std::string("peer expert reduce copy: ") + cudaGetErrorString(e);
+        return false;
+    }
+    return true;
+}
+
+void RemoteExpertOpt::accumulate(const PeerExperts& peer) {
+    for (int64_t i = 0; i < tokens_ * H; ++i) h_sum_[token_begin_ * H + i] += peer.h_out_[i];
+    for (int64_t i = 0; i < tokens_ * K; ++i)
+        h_mask_[token_begin_ * K + i] |= peer.owned_[(size_t) i] != 0;
+}
+
 bool RemoteExpertOpt::owns(int64_t layer, int32_t expert) const {
     for (const auto& p : peers_)
         if (p.remote->cache_.slot_of(layer, expert) >= 0) return true;
+    for (const auto& p : ppeers_)
+        if (p.peer->has(layer, expert)) return true;
     return false;
 }
 
