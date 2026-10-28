@@ -30,7 +30,9 @@
   "700",
   "--vram-reserve-later-mib",
   "952",
-  "--remote-expert-opt"
+  "--remote-expert-opt",
+  "--ple-io",
+  "direct"
  ],
  "cwd": "/home/dmitriy/projects/ai/LLM/Strata",
  "tokenizer": "/home/dmitriy/projects/ai/LLM/Strata-data/packs/uncensored-q4_k_m/tokenizer",

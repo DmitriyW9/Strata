@@ -28,7 +28,13 @@
   "--vision",
   "--vram-reserve-mib",
   "700",
-  "--remote-expert-opt"
+  "--vram-reserve-later-mib",
+  "952",
+  "--remote-expert-opt",
+  "--peer-device",
+  "1",
+  "--ple-io",
+  "direct"
  ],
  "cwd": "/home/dmitriy/projects/ai/LLM/Strata",
  "tokenizer": "/home/dmitriy/projects/ai/LLM/Strata-data/packs/uncensored-q5_k_m/tokenizer",
@@ -38,7 +44,7 @@
   "/usr/local/cuda-12.9/bin",
   "/usr/local/cuda-12.9/lib64"
  ],
- "host": "127.0.0.1",
+ "host": "0.0.0.0",
  "port": 8080,
  "cuda": 12,
  "env": {
@@ -51,12 +57,14 @@
  ],
  "gpus_asked": true,
  "layer_split": "auto",
+ "gpu_order": "as_given",
  "open_browser": false,
  "vision": {
   "exe": "/home/dmitriy/projects/ai/LLM/Strata/engine-cuda12/strata-vision",
   "mmproj": "/home/dmitriy/projects/ai/LLM/models/mmproj-Qwen3.8-Flash-Next-Uncensored-F16.gguf",
   "model": "/home/dmitriy/projects/ai/LLM/models/Qwen3.8-Flash-Next-Uncensored-Q5_K_M-00001-of-00003.gguf",
-  "gpu": true,
-  "max_tokens": 1024
+  "gpu": false,
+  "max_tokens": 1024,
+  "threads": 16
  }
 }
