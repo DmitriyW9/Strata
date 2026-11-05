@@ -87,6 +87,24 @@ class Rule(unittest.TestCase):
         self.assertIn("context 393216", d.line)
         self.assertFalse(decide(cards=v100, allow_untested=True, ram_available_gib=50).use_split)   # the host cache needs RAM
 
+    def test_a_v100_beside_a_newer_card_is_an_explicit_pair_too(self):
+        # a V100-32GB beside an RTX 4070 SUPER 12GB (gpu [1, 0]): the pair passes the rule only as untested, and
+        # every card holds its slice of the SAME experts, so the smallest card sizes the host cache.
+        pair = [S.Card(index=1, name="Tesla V100-PCIE-32GB", vram_mib=32768, cc=70),
+                S.Card(index=0, name="NVIDIA GeForce RTX 4070 SUPER", vram_mib=12288, cc=89)]
+        self.assertFalse(decide(cards=pair).use_split)                       # auto keeps the layer split
+        d = decide(cards=pair, allow_untested=True, context=131072, ram_available_gib=120)
+        self.assertTrue(d.use_split, d.reasons)                              # an explicit on takes the pair on a roomy PC
+        self.assertIn("different models", " ".join(d.untested))
+        # (71.7/2 + 9) needed per card, the 4070S has 12: (44.85 - 12) * 2 = 65.7 GiB in host RAM
+        self.assertAlmostEqual(d.host_cache_gib, (71.7 / 2 + 9 - 12) * 2, delta=0.1)
+        self.assertIn("sm_89", " ".join(d.untested))                          # the pair's other arch is untested too
+        # this PC (94.2 GiB of RAM) cannot seat 65.7 + 27.5 + 3 + 4 + 8: the engine's own RAM rule says so,
+        # and it says so whatever the context -- on 94.2 GiB the pair stays on the layer split
+        d2 = decide(cards=pair, allow_untested=True, context=32768, ram_total_gib=94.2, ram_available_gib=94.2, cache_mib=0)
+        self.assertFalse(d2.use_split)
+        self.assertIn("RAM", d2.line)
+
     def test_ram_that_stays_must_be_free(self):
         self.assertTrue(decide(ram_available_gib=52).use_split)          # 27.5 + 3 + 4 + 8 spare = 42.5
         d = decide(ram_available_gib=30)

@@ -1,12 +1,15 @@
 #!/bin/bash
 # strata-split-N (the all-cards split engine, src/split, from sFNX, MIT, John Fink) for NVIDIA on Linux, built next to the release engine
 # so package_engine.py can ship it with `--include 'strata-split-*'` beside `strata`.  One executable per card count and one architecture
-# (the engine refuses a card of any other architecture).  RUNPATH $ORIGIN: it finds cudart/cublas beside itself.
+# (the engine refuses a card of any other architecture); a pair of unlike cards builds ONE binary for both with ARCH2=<cc>
+# (a code object per arch, and the engine accepts both).  RUNPATH $ORIGIN: it finds cudart/cublas beside itself.
 #
-#   SRC=<checkout> B=<build dir> CUDA=/usr/local/cuda-13.1 GG=<llama.cpp checkout> [ARCH=86] [CARDS="2"] [JOBS=8]  packaging/build_split_cuda.sh
+#   SRC=<checkout> B=<build dir> CUDA=/usr/local/cuda-13.1 GG=<llama.cpp checkout> [ARCH=86] [ARCH2=89] [CARDS="2"] [JOBS=8]  packaging/build_split_cuda.sh
 #
-# ARCH is one compute capability; 86 is the one that has been run (2 RTX A6000). CARDS lists the counts to build; 3 and 4 build but have
-# not been run with the host exchange, and the launcher keeps them off unless a tester allows them (strata_control/split_engine.py).
+# ARCH is one compute capability; 86 is the one that has been run (2 RTX A6000). ARCH2 (a second card's arch, e.g. a V100
+# beside a 4070: ARCH=70 ARCH2=89) keeps the kernels on ARCH's paths and adds a code object for the other card. CARDS lists the
+# counts to build; 3 and 4 build but have not been run with the host exchange, and the launcher keeps them off unless a tester
+# allows them (strata_control/split_engine.py).
 # After the build the script FAILS if the binary can call any CUDA peer-access function: the engine must not map one card into another.
 # Prints the binary paths, one per line, last.
 set -eu
@@ -15,13 +18,17 @@ B=${B:?B=<build dir>}
 CUDA=${CUDA:?CUDA=<toolkit root>}
 GG=${GG:?GG=<llama.cpp checkout at the pinned commit>}
 ARCH=${ARCH:-86}
+ARCH2=${ARCH2:-}
 CARDS=${CARDS:-2}
 JOBS=${JOBS:-8}
 export PATH=$CUDA/bin:$PATH
+# A build whose base arch sits below sm_75 (e.g. ARCH=70, a Volta V100) needs the experimental gate on in the root CMakeLists.
+exp=OFF; if [ "${ARCH#0}" -lt 75 ] 2>/dev/null; then exp=ON; fi
 rm -f "$B/CMakeCache.txt"
 cmake -G Ninja -S "$SRC" -B "$B" -DCMAKE_BUILD_TYPE=Release -DSTRATA_ENABLE_CUDA=ON -DSTRATA_BUILD_TESTS=OFF -DSTRATA_BUILD_SPLIT=ON \
-  "-DSTRATA_SPLIT_CARDS=${CARDS// /;}" -DSTRATA_SPLIT_ARCH="$ARCH" "-DCMAKE_CUDA_ARCHITECTURES=$ARCH" -DCMAKE_CUDA_COMPILER="$CUDA/bin/nvcc" \
-  -DCUDAToolkit_ROOT="$CUDA" -DSTRATA_GGML_DIR="$GG" -DSTRATA_NATIVE_EXPERTS=ON -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
+  "-DSTRATA_SPLIT_CARDS=${CARDS// /;}" -DSTRATA_SPLIT_ARCH="$ARCH" ${ARCH2:+-DSTRATA_SPLIT_ARCH2="$ARCH2"} "-DCMAKE_CUDA_ARCHITECTURES=$ARCH${ARCH2:+;$ARCH2}" -DCMAKE_CUDA_COMPILER="$CUDA/bin/nvcc" \
+  ${CUDAHOSTCXX:+-DCMAKE_CUDA_HOST_COMPILER="$CUDAHOSTCXX"} ${CUDAFLAGS:+-DCMAKE_CUDA_FLAGS="$CUDAFLAGS"} \
+  -DSTRATA_EXPERIMENTAL_SM60="$exp" -DCUDAToolkit_ROOT="$CUDA" -DSTRATA_GGML_DIR="$GG" -DSTRATA_NATIVE_EXPERTS=ON -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
   -DCMAKE_SKIP_BUILD_RPATH=OFF '-DCMAKE_INSTALL_RPATH=$ORIGIN'
 out=""
 for n in $CARDS; do

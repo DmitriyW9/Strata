@@ -99,10 +99,11 @@ void covers(const char* name, unsigned long long bar, unsigned long long vram, b
     }
 }
 
-// require_card_arch on a card (major.minor) against a build (arch); refused when `says` is not empty, saying it
-void arch(const char* name, int major, int minor, int build, const std::string& says) {
+// require_card_arch on a card (major.minor) against a build (arch, and arch2 for a build of two); refused when
+// `says` is not empty, saying it
+void arch(const char* name, int major, int minor, int build, const std::string& says, int build2 = 0) {
     try {
-        fnx::require_card_arch(0, name, major, minor, build);
+        fnx::require_card_arch(0, name, major, minor, build, build2);
         if (!says.empty()) fail(std::string(name) + " on an sm_" + std::to_string(build) + " build passed, want it refused");
     } catch (const std::runtime_error& e) {
         if (says.empty()) fail(std::string(name) + " on an sm_" + std::to_string(build) + " build refused: " + e.what());
@@ -159,6 +160,10 @@ int main() {
     arch("NVIDIA A100-PCIE-40GB", 8, 0, 86, "make ARCH=80");
     arch("NVIDIA GeForce RTX 4090", 8, 9, 89, "");             // a build for its arch: refused only by what else it lacks
     arch("NVIDIA GeForce RTX 3080", 8, 6, 86, "");             // 68 SMs
+    // a build for two archs (one fatbin, a code object each; a V100 beside a newer card): either card passes
+    arch("Tesla V100-PCIE-32GB", 7, 0, 70, "", 89);            // the pair's first card
+    arch("NVIDIA GeForce RTX 4070 SUPER", 8, 9, 70, "", 89);   // and its second
+    arch("NVIDIA GeForce RTX 3090", 8, 6, 70, "make ARCH=86", 89);   // neither's: the refusal names both archs
 
     bdf("0000:3B:00.0", "0000:3b:00.0");        // cudaDeviceGetPCIBusId
     bdf("00000000:3B:00.0", "0000:3b:00.0");    // nvidia-smi

@@ -10,15 +10,18 @@
 
 namespace fnx {
 
-// The kernels are compiled for one compute capability (make ARCH=...). On any other card the driver compiles their
-// PTX at load without a word, a different program from the one the checks ran, so a card must be the build's arch
-// exactly. Any SM count runs (the hc read sizes its grid to the card, src/hc.cuh). arch: the build's (FNX_ARCH); major,
+// The kernels are compiled for one compute capability (make ARCH=...), or for two with a pair of unlike cards
+// (make ARCH2=...: one fatbin with a code object for each, so a mixed pair runs the same compiled kernels on both).
+// On any other card the driver compiles their PTX at load without a word, a different program from the one the
+// checks ran, so a card must be one of the build's archs exactly. Any SM count runs (the hc read sizes its grid to
+// the card, src/hc.cuh). arch: the build's (FNX_ARCH); arch2: its second (FNX_ARCH2, 0: one arch); major,
 // minor: the card's
-inline void require_card_arch(int dev, const std::string& name, int major, int minor, int arch) {
+inline void require_card_arch(int dev, const std::string& name, int major, int minor, int arch, int arch2 = 0) {
     const int cc = major * 10 + minor;
-    if (cc != arch)
+    if (cc != arch && cc != arch2)
         throw std::runtime_error("card " + std::to_string(dev) + " (" + name + ") is compute capability " + std::to_string(major) + "." +
                                  std::to_string(minor) + " and this build is for sm_" + std::to_string(arch) +
+                                 (arch2 ? " + sm_" + std::to_string(arch2) : "") +
                                  ": rebuild with make ARCH=" + std::to_string(cc) + " (the Makefile says if it builds for that one)");
 }
 

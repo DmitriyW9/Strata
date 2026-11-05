@@ -11,12 +11,15 @@ This module is pure (no I/O besides reading GGUF directories): the launcher pass
 has actually been run:
 
   - not turned off (mode(): "auto" by default; "on" is the same rule but a refusal is reported; "off" never);
-  - Linux, 2 to 4 cards of ONE make (NVIDIA, or AMD RDNA4 gfx1201: the R9700 and RX 9070), all the same model of card and memory size;
+  - Linux, 2 to 4 cards of ONE make (NVIDIA, or AMD RDNA4 gfx1201: the R9700 and RX 9070), all the same model of card and memory size
+    (unlike cards, e.g. a V100 beside a newer card, run only with an explicit "on" and a build for both archs;
+    the rule marks them untested);
   - a card architecture and card count that have been run (TESTED, per make): NVIDIA sm_86 on 2 cards, AMD gfx1201 on 4 cards. Others build
     but stay off unless the caller says allow_untested (testers); the Decision says which part is untested in plain words;
-  - NVIDIA sm_70 (V100) is an explicit-on path: `--split-engine on` accepts it (the architecture and a longer
-    context are marked untested) and, when the experts do not fit in the cards, keeps the arena and moves the
-    overflow to host RAM (FNX_EXPERT_RAM_GIB).  Auto keeps the layer split on sm_70;
+  - NVIDIA sm_70 (V100) is an explicit-on path: `--split-engine on` accepts it, alone or beside a newer card (the
+    architecture, a longer context, and unlike cards are marked untested) and, when the experts do not fit in the
+    cards, keeps the arena and moves the overflow to host RAM (FNX_EXPERT_RAM_GIB, sized from the smallest card,
+    since every card holds its slice of the SAME experts).  Auto keeps the layer split on sm_70;
   - AMD gfx1201 is automatic like NVIDIA (the owner's decision: default on for two or more cards, off with `--split-engine off`); AUTO_SPLIT_AMD_ARCHS is the
     one constant that says which AMD architectures start it by themselves, every other AMD architecture keeps the layer split silently;
   - the GGUF is a set the engine reads (checked from the file's tensor types, not its name), the Qwen3.8-Flash-Next shapes (48 layers,
@@ -196,7 +199,10 @@ def decide(*, enabled: bool, system: str, cards: list[Card], ram_total_gib: floa
         if len({c.vendor for c in cards}) != 1:
             why.append("the cards are of different makes")
         if len({(c.name, c.vram_mib) for c in cards}) != 1:
-            why.append("the cards are not all the same model and size")
+            if allow_untested:      # an explicit on for unlike cards (a V100 beside a newer card): marked untested
+                untested.append("cards of different models and sizes (" + " + ".join(sorted({c.arch_name for c in cards})) + ")")
+            else:
+                why.append("the cards are not all the same model and size")
         if make == "nvidia" and not all(c.cc >= 70 for c in cards):
             why.append("a card is too old for it")
         if make == "amd" and not all(c.arch_name in BUILT_ARCHS["amd"] for c in cards):
@@ -242,9 +248,13 @@ def decide(*, enabled: bool, system: str, cards: list[Card], ram_total_gib: floa
     need_vram = model.routed_bytes / GIB / max(n, 1) + CARD_OVERHEAD_GIB
     per_card = min(c.vram_mib for c in cards) / 1024 if cards else 0.0
     host_cache = 0.0
-    sm70 = bool(cards) and cards[0].vendor == "nvidia" and all(c.cc == 70 for c in cards)
+    sm70 = bool(cards) and cards[0].vendor == "nvidia" and any(c.cc == 70 for c in cards)
     if cards and n >= 2 and per_card < need_vram:
-        if allow_untested and sm70:              # explicit --split-engine on for V100: the arena keeps the overflow in RAM
+        if allow_untested and sm70:              # explicit --split-engine on for V100 (alone, or beside a newer
+                                                 # card of another size): the arena keeps the overflow in RAM. One
+                                                 # mask selects the experts and every card holds its even slice of
+                                                 # the SAME ones, so the smallest card sizes the cache, not each
+                                                 # card its own share (that is why unlike cards stay untested)
             host_cache = (need_vram - per_card) * n
         else:
             why.append(f"all the experts do not fit in the cards' memory (each card needs about {need_vram:.0f} GiB, has "
@@ -437,7 +447,7 @@ def expected(cfg: dict, *, indexes: list[int] | None = None, native: str | None 
         if native and os.path.isfile(native):
             model = (scan or scan_model)(native)
         experimental_ok = m == "on" and bool(cards) and (cards[0].vendor == "amd" or
-                                                          (cards[0].vendor == "nvidia" and all(c.cc == 70 for c in cards)))
+                                                          (cards[0].vendor == "nvidia" and any(c.cc == 70 for c in cards)))
         d = decide(enabled=True, system=system, cards=cards, ram_total_gib=total, ram_available_gib=avail, model=model, context=context,
                    allow_untested=allow_untested or experimental_ok)
         if not d.use_split or _auto_gates(d, cards, model, chosen, m) is not None:
@@ -501,7 +511,7 @@ def _apply(cfg: dict, *, exe_for_cards, system, allow_untested, probe, ram, scan
         return Decision(False, [f"the model file could not be read ({type(e).__name__})"])
     context = int(_flag(args, "--max-context") or 8192)
     # an AMD architecture nobody has run (gfx1100..1103, gfx1200) starts only on the person's explicit "on", with the engine's own self-test as the guard
-    nvidia_sm70 = bool(cards) and cards[0].vendor == "nvidia" and all(c.cc == 70 for c in cards)
+    nvidia_sm70 = bool(cards) and cards[0].vendor == "nvidia" and any(c.cc == 70 for c in cards)
     experimental_ok = mode_ == "on" and bool(cards) and (cards[0].vendor == "amd" or nvidia_sm70)
     d = decide(enabled=True, system=system, cards=cards, ram_total_gib=total, ram_available_gib=avail, model=model, context=context,
                allow_untested=allow_untested or experimental_ok)

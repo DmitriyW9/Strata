@@ -60,6 +60,19 @@ elseif(NOT STRATA_SPLIT_ARCH)
     set(STRATA_SPLIT_ARCH 86)
   endif()
 endif()
+# a pair of unlike cards (e.g. a V100 beside a 4070): STRATA_SPLIT_ARCH2 names the second compute capability the
+# same sources are built for (one fatbin, a code object per arch; the engine accepts both, src/card_check.hpp).
+# Empty: one arch, every build as before.
+set(STRATA_SPLIT_ARCH2 "" CACHE STRING "second compute capability for a pair of unlike cards (e.g. 89), empty: one arch")
+if(NOT STRATA_SPLIT_ARCH2 OR STRATA_SPLIT_ARCH2 EQUAL 0)
+  set(_fnx_cuda_archs "${STRATA_SPLIT_ARCH}-real")
+  set(STRATA_SPLIT_ARCH2 0)
+elseif(NOT STRATA_SPLIT_ARCH2 MATCHES "^[0-9]+$")
+  message(WARNING "STRATA_BUILD_SPLIT: STRATA_SPLIT_ARCH2 is a number or empty, skipped")
+  return()
+else()
+  set(_fnx_cuda_archs "${STRATA_SPLIT_ARCH}-real;${STRATA_SPLIT_ARCH2}-real")
+endif()
 
 set(_sp ${CMAKE_CURRENT_SOURCE_DIR})
 set(_sp_engine
@@ -110,10 +123,10 @@ foreach(_n ${STRATA_SPLIT_CARDS})
   endif()
   target_include_directories(${_t} PRIVATE ${_sp}/src ${_sp}/tools ${STRATA_GGML_DIR}/ggml/src/ggml-cuda ${STRATA_GGML_DIR}/ggml/src
                              ${STRATA_GGML_DIR}/ggml/include)
-  target_compile_definitions(${_t} PRIVATE FNX_NCARD=${_n} FNX_ARCH=${STRATA_SPLIT_ARCH} FNX_27B=0 FNX_HOSTRING=1 FNX_PF_JOB=${STRATA_SPLIT_PF_JOB}
+  target_compile_definitions(${_t} PRIVATE FNX_NCARD=${_n} FNX_ARCH=${STRATA_SPLIT_ARCH} FNX_ARCH2=${STRATA_SPLIT_ARCH2} FNX_27B=0 FNX_HOSTRING=1 FNX_PF_JOB=${STRATA_SPLIT_PF_JOB}
                              FNX_DIR="${_sp}")
   target_compile_options(${_t} PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:--use_fast_math --expt-relaxed-constexpr -Wno-deprecated-gpu-targets>)
-  set_target_properties(${_t} PROPERTIES CUDA_ARCHITECTURES "${STRATA_SPLIT_ARCH}-real" CUDA_STANDARD 17 CUDA_STANDARD_REQUIRED ON
+  set_target_properties(${_t} PROPERTIES CUDA_ARCHITECTURES "${_fnx_cuda_archs}" CUDA_STANDARD 17 CUDA_STANDARD_REQUIRED ON
                         CXX_STANDARD 17)
   find_package(Threads REQUIRED)
   find_package(CUDAToolkit REQUIRED)

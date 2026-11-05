@@ -117,7 +117,7 @@ void check_cards() {
         }
         (void) FNX_ARCH;
 #else
-        require_card_arch(dev, prop.name, prop.major, prop.minor, FNX_ARCH);
+        require_card_arch(dev, prop.name, prop.major, prop.minor, FNX_ARCH, FNX_ARCH2);
 #endif
 #if FNX_HOSTRING
         (void) skip_bar1;   // no card writes into another: the identity-domain and BAR1 requirements do not apply
