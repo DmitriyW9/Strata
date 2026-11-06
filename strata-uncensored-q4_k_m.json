@@ -52,7 +52,9 @@
   "STRATA_ARGMAX_ROWS_SM70": "1",
   "STRATA_STAGE_TRIM": "1",
   "STRATA_HC_Q8": "1",
-  "STRATA_KV_HOST_DMA": "1"
+  "STRATA_KV_HOST_DMA": "1",
+  "STRATA_PCIE_AUTO_SPLIT": "0",
+  "STRATA_MTP_KEEP": "1"
  },
  "gpu": [
   1,

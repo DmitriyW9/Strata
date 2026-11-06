@@ -49,7 +49,9 @@
  "cuda": 12,
  "env": {
   "STRATA_SM70_TABLE": "1",
-  "STRATA_ARGMAX_ROWS_SM70": "1"
+  "STRATA_ARGMAX_ROWS_SM70": "1",
+  "STRATA_PCIE_AUTO_SPLIT": "0",
+  "STRATA_MTP_KEEP": "1"
  },
  "gpu": [
   1,
