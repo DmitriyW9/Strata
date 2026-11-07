@@ -31,9 +31,7 @@
   "32768",
   "--vision",
   "--vram-reserve-mib",
-  "700",
-  "--vram-reserve-later-mib",
-  "2048",
+  "832",
   "--remote-expert-opt",
   "--ple-io",
   "direct"
@@ -50,21 +48,13 @@
  "port": 8080,
  "cuda": 12,
  "env": {
-  "STRATA_SM70_TABLE": "1",
-  "STRATA_ARGMAX_ROWS_SM70": "1",
-  "STRATA_STAGE_TRIM": "1",
   "STRATA_HC_Q8": "1",
-  "STRATA_KV_HOST_DMA": "1",
-  "STRATA_PCIE_AUTO_SPLIT": "0",
   "STRATA_MTP_KEEP": "1"
  },
  "gpu": [
-  1,
   0
  ],
  "gpus_asked": true,
- "layer_split": "auto",
- "gpu_order": "as_given",
  "open_browser": false,
  "vision": {
   "exe": "/home/dmitriy/projects/ai/LLM/Strata/engine-cuda12/strata-vision",

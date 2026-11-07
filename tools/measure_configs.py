@@ -18,8 +18,8 @@ warms up once, then measures decode tok/s RUNS times on the same three prompts, 
 --out as it goes (a killed run leaves the arms already measured).  The file is JSON: per arm the args, the
 env, the per-run rates, the startup facts the engine printed (backing, slots, load rate, workers, PCIe).
 
-    python tools/measure_configs.py strata-uncensored-q4_k_m.json
-    python tools/measure_configs.py strata-uncensored-q4_k_m.json --arms 4kb,per-layer --runs 2
+    python tools/measure_configs.py strata-ud-q4_k_xl.json
+    python tools/measure_configs.py strata-ud-q4_k_xl.json --arms 4kb,per-layer --runs 2
 """
 from __future__ import annotations
 

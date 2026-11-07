@@ -576,7 +576,7 @@ int selftest(const std::string& dir, uint32_t rb) {
         CHECK(rd.snapshot().keepalive_reads == 0, "keep-alive without the worker thread");
     }
     std::filesystem::remove(path);
-    for (const uint32_t q5_row_bytes : {k::PLE_Q5_0_ROW_BYTES, k::PLE_Q5_1_ROW_BYTES}) {
+    for (const uint32_t q5_row_bytes : {k::PLE_ROW_BYTES_Q5_0, k::PLE_ROW_BYTES_Q5_1}) {
         constexpr uint32_t Q5_ROWS = 5000;
         const std::string q5_path = dir + "/ple_reader_q5_selftest_" + std::to_string(q5_row_bytes) + ".bin";
         if (!make_table(q5_path, Q5_ROWS, q5_row_bytes)) {
