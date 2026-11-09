@@ -26,8 +26,6 @@ macro(strata_cuda_toolchain)
     endif()
     set(_strata_cuda_arch_defaulted ON)
   endif()
-  # CUDA 12.x supports GCC <= 14; let newer host compilers use nvcc's compatibility override.
-  string(APPEND CMAKE_CUDA_FLAGS " --allow-unsupported-compiler")
   enable_language(CUDA)
   # `enable_language(CUDA)` gives the .cu compile rules but NOT the imported targets, so `CUDA::cudart` has to
   # be brought in explicitly for the host-side tests that call cudaMalloc themselves.
