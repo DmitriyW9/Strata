@@ -49,7 +49,8 @@
  "cuda": 12,
  "env": {
   "STRATA_HC_Q8": "1",
-  "STRATA_MTP_KEEP": "1"
+  "STRATA_MTP_KEEP": "1",
+  "STRATA_ADAPT_FETCH": "1"
  },
  "gpu": [
   0
