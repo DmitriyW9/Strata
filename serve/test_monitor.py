@@ -29,7 +29,7 @@ class ReloadableEngine(MockEngine):
 
 
 class MonitorOff(unittest.TestCase):
-    """#332 is opt-in: by default no prompt or answer is kept, and the monitor's endpoints do not exist."""
+    """Full request bodies are opt-in; regular metrics retain only a bounded text preview."""
 
     def test_off_by_default(self):
         tok = ByteTokenizer()
@@ -43,6 +43,7 @@ class MonitorOff(unittest.TestCase):
             with urllib.request.urlopen(req, timeout=10) as r:
                 self.assertEqual(r.status, 200)
             self.assertEqual(len(svc.api_requests), 0)
+            self.assertEqual(svc.metrics()["requests"][0]["prompt_preview"], "secret")
             for path in ("/api/requests", "/api-monitor"):
                 with self.assertRaises(urllib.error.HTTPError) as e:
                     urllib.request.urlopen(base + path, timeout=10)
@@ -156,6 +157,19 @@ class Monitor(unittest.TestCase):
         for field in ("output", "reasoning"):
             self.assertEqual(len(handler.record[field]), 262144)
             self.assertTrue(handler.record[field + "_truncated"])
+
+    def test_prompt_preview_uses_latest_user_text_and_truncates_by_unicode_character(self):
+        preview, truncated = self.svc.prompt_preview({
+            "messages": [
+                {"role": "user", "content": "older prompt"},
+                {"role": "assistant", "content": "reply"},
+                {"role": "user", "content": [{"type": "text", "text": "абвгд🙂" * 5}]},
+            ]
+        })
+        self.assertEqual(preview, "абвгд🙂абвгд🙂абвгд🙂аб")
+        self.assertTrue(truncated)
+        self.assertEqual(len(preview), 20)
+        self.assertEqual(self.svc.prompt_preview({"input": "short"}), ("short", False))
 
     def test_queue_wait_and_loading_are_attributed_separately(self):
         self.engine.unload()

@@ -5568,8 +5568,55 @@ class Service:
             reading = self.status.get("busy") and self.status.get("first_token") is None
         return getattr(self.engine, "prefill_tok_s_mean", None) if reading else 0.0
 
+    @staticmethod
+    def prompt_preview(req):
+        """Return at most 20 visible characters of the latest user text for the Recent requests table."""
+        def text_segments(value):
+            if isinstance(value, str):
+                yield value
+            elif isinstance(value, list):
+                for item in value:
+                    if isinstance(item, str):
+                        yield item
+                    elif isinstance(item, dict) and isinstance(item.get("text"), str):
+                        yield item["text"]
+
+        def bounded_text(value):
+            chars = []
+            pending_space = False
+            for segment in text_segments(value):
+                if chars:
+                    pending_space = True
+                for char in segment:
+                    if char.isspace():
+                        pending_space = bool(chars)
+                        continue
+                    if pending_space:
+                        chars.append(" ")
+                        pending_space = False
+                    chars.append(char)
+                    if len(chars) > 20:
+                        return "".join(chars[:20]), True
+            return "".join(chars), False
+
+        messages = req.get("messages")
+        if isinstance(messages, list):
+            user = next((item for item in reversed(messages)
+                         if isinstance(item, dict) and item.get("role") == "user"), None)
+            content = user.get("content") if user else None
+        else:
+            request_input = req.get("input")
+            if isinstance(request_input, list):
+                user = next((item for item in reversed(request_input)
+                             if isinstance(item, dict) and item.get("role") == "user"), None)
+                content = user.get("content") if user else request_input
+            else:
+                content = request_input
+        return bounded_text(content)
+
     def begin_request(self, path, req):
-        """#332: a monitor record for this request, or None when the monitor is off (nothing is kept then)."""
+        """#332: an API monitor record is optional; the bounded prompt preview feeds the Recent requests table."""
+        self.request_trace.prompt_preview, self.request_trace.prompt_preview_truncated = self.prompt_preview(req)
         if not self.api_monitor:
             return None
         raw = json.dumps(req, ensure_ascii=False, indent=2)
@@ -6591,6 +6638,8 @@ class Service:
                             seen = 0 if admission_rejected else prompt_tokens_seen(len(ids), last)   # #471: < len(ids) when cancelled mid-read; #3040
                             self.history.append({
                                 "id": request_id,
+                                "prompt_preview": getattr(self.request_trace, "prompt_preview", ""),
+                                "prompt_preview_truncated": getattr(self.request_trace, "prompt_preview_truncated", False),
                                 "projection": (sampling or {}).get("experimental_speed_projection") is not False
                                 if loaded else None,
                                 "time": started, "duration_s": round(time.time() - started, 1), "finish": finish,
@@ -8322,6 +8371,8 @@ def make_handler(svc: Service):
                         record["finished_at"] = time.time()
                         record["state"] = "error" if record.get("error") else record.get("outcome", "completed")
                     svc.request_trace.record = None
+                svc.request_trace.prompt_preview = ""
+                svc.request_trace.prompt_preview_truncated = False
 
         def _images(self, req):
             """POST /v1/images/generations (serve/images.py): one sd-cli job in the GPU's turn."""

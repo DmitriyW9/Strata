@@ -860,7 +860,9 @@ screenshots.
 
 ### API request monitor
 
-Off by default, because it keeps prompts and answers in memory. Turn it on with `"api_monitor": true` or
+The Recent requests table keeps only the first 20 characters of each request's latest user message in the last 500
+request summaries in memory. Full request bodies and answers are not kept unless the API request monitor is enabled.
+Turn it on with `"api_monitor": true` or
 `serve/server.py --api-monitor`; otherwise the two endpoints answer 404. `/api-monitor` shows the model state, load and unload
 controls, active and queued requests, request bodies, output, separate reasoning and response bodies, with load, queue,
 first-token and decode timings. `GET /api/requests` returns summaries and `GET /api/requests?id=<id>` one request. The
