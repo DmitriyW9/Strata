@@ -5570,7 +5570,8 @@ class Service:
 
     @staticmethod
     def prompt_preview(req):
-        """Return at most 20 visible characters of the latest user text for the Recent requests table."""
+        """Return at most 20 visible characters of the latest user text for the Recent requests table.
+        Leading whitespace is dropped before the 20 characters are counted."""
         def text_segments(value):
             if isinstance(value, str):
                 yield value
@@ -5585,6 +5586,10 @@ class Service:
             chars = []
             pending_space = False
             for segment in text_segments(value):
+                if not chars:
+                    segment = segment.lstrip()     # the preview starts at the first visible character
+                if not segment:
+                    continue
                 if chars:
                     pending_space = True
                 for char in segment:

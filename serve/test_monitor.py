@@ -170,6 +170,14 @@ class Monitor(unittest.TestCase):
         self.assertTrue(truncated)
         self.assertEqual(len(preview), 20)
         self.assertEqual(self.svc.prompt_preview({"input": "short"}), ("short", False))
+        # leading spaces, newlines and tabs are dropped before the 20 characters are counted
+        self.assertEqual(self.svc.prompt_preview({"messages": [{"role": "user", "content": "   hello"}]}),
+                         ("hello", False))
+        self.assertEqual(self.svc.prompt_preview({"messages": [{"role": "user", "content": " \n\t hidden start visible text here"}]}),
+                         ("hidden start visible", True))
+        self.assertEqual(self.svc.prompt_preview({"input": [{"type": "text", "text": "   "},
+                                                            {"type": "text", "text": "after a blank part"}]}),
+                         ("after a blank part", False))
 
     def test_queue_wait_and_loading_are_attributed_separately(self):
         self.engine.unload()

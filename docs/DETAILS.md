@@ -860,8 +860,8 @@ screenshots.
 
 ### API request monitor
 
-The Recent requests table keeps only the first 20 characters of each request's latest user message in the last 500
-request summaries in memory. Full request bodies and answers are not kept unless the API request monitor is enabled.
+The Recent requests table keeps only the first 20 characters of each request's latest user message, counted after its
+leading spaces are dropped, in the last 500 request summaries in memory. Full request bodies and answers are not kept unless the API request monitor is enabled.
 Turn it on with `"api_monitor": true` or
 `serve/server.py --api-monitor`; otherwise the two endpoints answer 404. `/api-monitor` shows the model state, load and unload
 controls, active and queued requests, request bodies, output, separate reasoning and response bodies, with load, queue,
