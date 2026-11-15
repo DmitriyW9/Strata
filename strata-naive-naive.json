@@ -1,0 +1,27 @@
+{
+ "exe": "/home/dmitriy/projects/ai/LLM/Strata/engine-cuda12/strata-naive",
+ "args": [
+  "--native",
+  "/home/dmitriy/projects/ai/LLM/models/Naive-N0.5-Flash-MQ87/Naive-N0.5-Flash-MQ87-00001-of-00004.gguf",
+  "--draft",
+  "/home/dmitriy/projects/ai/LLM/models/Naive-N0.5-Flash-MQ87/draft/Naive-N0.5-Flash-DSpark-Draft-Q8_0.gguf",
+  "--max-context",
+  "262144"
+ ],
+ "cwd": "/home/dmitriy/projects/ai/LLM/Strata",
+ "tokenizer": "/home/dmitriy/projects/ai/LLM/Strata-data/packs/naive-n05-flash/tokenizer",
+ "model_name": "naive-n0.5-flash-mq87",
+ "log": "/home/dmitriy/projects/ai/LLM/Strata/strata-naive-naive.log",
+ "host": "127.0.0.1",
+ "port": 8081,
+ "cuda": 12,
+ "gpu": [
+  1
+ ],
+ "gpus_asked": true,
+ "layer_split": "auto",
+ "gpu_order": "as_given",
+ "open_browser": false,
+ "mtp": false,
+ "drafting": "off"
+}

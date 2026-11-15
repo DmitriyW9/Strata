@@ -66,6 +66,22 @@ QWEN35_PATTERN = (
 )
 
 
+# The `qwen2` pre-tokenizer, transcribed from `.ref`: `third_party/llama.cpp/src/llama-vocab.cpp` L383,
+# `case LLAMA_VOCAB_PRE_TYPE_QWEN2` (the shared STABLELM2 / QWEN2 / HUNYUAN / SOLAR_OPEN list).  It is
+# QWEN35 minus `\p{M}`: a combining mark here joins the PUNCTUATION run, not the letter run - the same
+# one-character difference the file above warns about in reverse, so `pre=qwen2` never runs on the qwen35
+# rule.  Measured on Naive-N0.5-Flash-MQ87: its GGUF carries tokenizer.ggml.pre = qwen2.
+QWEN2_PATTERN = (
+    r"(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])"
+    r"|[^\r\n\p{L}\p{N}]?\p{L}+"
+    r"|\p{N}"
+    r"| ?[^\s\p{L}\p{N}]+[\r\n]*"
+    r"|\s*[\r\n]+"
+    r"|\s+(?!\S)"
+    r"|\s+"
+)
+
+
 # The `deepseek-v3` pre-tokenizer (DeepSeek-V3 / V4.1; llama.cpp LLAMA_VOCAB_PRE_TYPE_DEEPSEEK3_LLM, the same regex list as
 # JoyAI and Hunyuan-dense).  UNLIKE the single-pattern families it is a SEQUENCE: each pattern splits the pieces the
 # one before it left (a span a pattern does not match stays a piece of its own), so digits (runs of 1..3) and CJK
@@ -107,6 +123,8 @@ def pre_tokenizer_kind(pre) -> str | None:
     p = "qwen35" if pre is None or pre == "" else str(pre)
     if p == "qwen35":
         return "qwen35"
+    if p == "qwen2":
+        return "qwen2"
     if p.startswith("deepseek"):
         return "deepseek3"
     return None
@@ -143,7 +161,8 @@ class Tokenizer:
             seq = [regex.compile(x) for x in DEEPSEEK3_PATTERNS]
             self._split = lambda text: _sequence_findall(seq, text)
         else:
-            self._re = regex.compile(QWEN35_PATTERN)
+            pattern = QWEN2_PATTERN if pre_tokenizer_kind(pre) == "qwen2" else QWEN35_PATTERN
+            self._re = regex.compile(pattern)
             self._split = self._re.findall
 
         # The literals matched directly instead of being run through BPE.  GGUF token types: 3 = CONTROL,
