@@ -4,7 +4,7 @@
 # (the engine refuses a card of any other architecture); a pair of unlike cards builds ONE binary for both with ARCH2=<cc>
 # (a code object per arch, and the engine accepts both).  RUNPATH $ORIGIN: it finds cudart/cublas beside itself.
 #
-#   SRC=<checkout> B=<build dir> CUDA=/usr/local/cuda-13.1 GG=<llama.cpp checkout> [ARCH=86] [ARCH2=89] [CARDS="2"] [JOBS=8]  packaging/build_split_cuda.sh
+#   SRC=<checkout> B=<build dir> CUDA=/usr/local/cuda-13.1 [GG=<llama.cpp checkout, an override>] [ARCH=86] [ARCH2=89] [CARDS="2"] [JOBS=8]  packaging/build_split_cuda.sh
 #
 # ARCH is one compute capability; 86 is the one that has been run (2 RTX A6000). ARCH2 (a second card's arch, e.g. a V100
 # beside a 4070: ARCH=70 ARCH2=89) keeps the kernels on ARCH's paths and adds a code object for the other card. CARDS lists the
@@ -16,7 +16,8 @@ set -eu
 SRC=${SRC:-$(cd "$(dirname "$0")/.." && pwd)}
 B=${B:?B=<build dir>}
 CUDA=${CUDA:?CUDA=<toolkit root>}
-GG=${GG:?GG=<llama.cpp checkout at the pinned commit>}
+GG=${GG:-}      # optional override (kept for two releases): a llama.cpp checkout to take ggml from; empty: the vendored third_party/strata-ggml
+ggml=""; [ -z "$GG" ] || ggml="-DSTRATA_GGML_DIR=$GG"
 ARCH=${ARCH:-86}
 ARCH2=${ARCH2:-}
 CARDS=${CARDS:-2}
@@ -28,7 +29,7 @@ rm -f "$B/CMakeCache.txt"
 cmake -G Ninja -S "$SRC" -B "$B" -DCMAKE_BUILD_TYPE=Release -DSTRATA_ENABLE_CUDA=ON -DSTRATA_BUILD_TESTS=OFF -DSTRATA_BUILD_SPLIT=ON \
   "-DSTRATA_SPLIT_CARDS=${CARDS// /;}" -DSTRATA_SPLIT_ARCH="$ARCH" ${ARCH2:+-DSTRATA_SPLIT_ARCH2="$ARCH2"} "-DCMAKE_CUDA_ARCHITECTURES=$ARCH${ARCH2:+;$ARCH2}" -DCMAKE_CUDA_COMPILER="$CUDA/bin/nvcc" \
   ${CUDAHOSTCXX:+-DCMAKE_CUDA_HOST_COMPILER="$CUDAHOSTCXX"} ${CUDAFLAGS:+-DCMAKE_CUDA_FLAGS="$CUDAFLAGS"} \
-  -DSTRATA_EXPERIMENTAL_SM60="$exp" -DCUDAToolkit_ROOT="$CUDA" -DSTRATA_GGML_DIR="$GG" -DSTRATA_NATIVE_EXPERTS=ON -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
+  -DSTRATA_EXPERIMENTAL_SM60="$exp" -DCUDAToolkit_ROOT="$CUDA" $ggml -DSTRATA_NATIVE_EXPERTS=ON -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
   -DCMAKE_SKIP_BUILD_RPATH=OFF '-DCMAKE_INSTALL_RPATH=$ORIGIN'
 out=""
 for n in $CARDS; do
