@@ -3,8 +3,10 @@
 #
 # It starts the web server (serve/server.py) with the strata-naive config, separate from the running
 # Flash-Next engine (that one stays on port 8080 and is not touched here).  The strata-naive engine
-# validates the model on start and, until the trunk forward lands (docs/NAIVE.md), refuses a request
-# with the reason; the server and the model facts still come up, so the setup is checkable now.
+# validates the model on start and answers chat requests with the CPU trunk forward
+# (include/strata/naive/runtime.hpp, docs/NAIVE.md); the DSpark draft stays opt-in and is off here.
+# Weights are read from the 81 GiB of shards on demand, so the first token of a cold start waits
+# for the page cache to fill; later tokens are faster.
 #
 # To only validate the model without starting the server (no GPU, no weights loaded):
 #   engine-cuda12/strata-naive --native <shard1.gguf> --draft <draft.gguf> --check

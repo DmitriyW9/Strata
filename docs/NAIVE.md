@@ -6,13 +6,14 @@ This page tracks the engine path for **Naive-N0.5-Flash** models, the `strata-na
 static_asserts the Flash-Next geometry), and this architecture shares none of it - like the
 `strata-dsv41` path, a second shape means a second binary.
 
-**Status today: the model is read, checked and served; the trunk's arithmetic, the weight loader,
-the first two real layers (the dense layer 0 and one window layer), the IQ2 expert FFN, the DSA
-(indexer) layer and a two-layer trunk slice (layer 0 + layer 1 + the output head) are built and
-unit-tested against an independent numpy reference; a prompt is still refused.**  `strata-naive`
-starts under the web server, answers `/v1/models` and the chat page, and refuses every request with
-one honest line: `the strata-naive trunk forward is not implemented yet`.  Nothing is guessed and
-nothing answers wrong.
+**Status today: the model is read, checked, served, and it answers.**  The trunk's arithmetic, the
+weight loader, the layers, the IQ2 expert FFN, the DSA layer and a two-layer trunk slice are
+unit-tested against an independent numpy reference; the 48-layer loop with its running caches, the
+session rewind, the sampler and the serve decode-loop are built and tested end to end against an
+independent numpy session over a synthetic model of the same architecture; and a served chat
+request on the real 4-shard file completed (the smoke section below).  Nothing is guessed and
+nothing answers wrong.  The DSpark draft stays opt-in and is off; verification against it has not
+started.
 
 ## What the model is (measured on Naive-N0.5-Flash-MQ87, not copied)
 
@@ -50,11 +51,11 @@ So the port is its own binary, and `strata`'s default path stays byte-identical.
 | --- | --- | --- |
 | Geometry (every metadata key, per-layer lists) | `include/strata/naive/geometry.hpp` | reads the model; cross-key rules in `check_geometry` |
 | Reader + tensor inventory (types, shapes, shard bounds) | `include/strata/naive/reader.hpp` | `--check` passes on MQ87 and its draft |
-| `strata-naive` binary (`--check`, serve INFO/READY, honest refusal) | `src/naive/naive_main.cpp` | builds CPU-only; serve protocol verified against `serve/server.py` |
+| `strata-naive` binary (`--check`, serve INFO/READY, the decode loop) | `src/naive/naive_main.cpp`, `include/strata/naive/runtime.hpp` | builds CPU-only; serves requests (the smoke section below) |
 | CMake target, OFF by default | `CMakeLists.txt` (`STRATA_BUILD_NAIVE`) | does not change any existing target |
 | `qwen2` pre-tokenizer (llama.cpp's QWEN2 rule, QWEN35 minus `\p{M}`) | `tools/strata_tokenizer.py` | unit tests pass; encodes/round-trips the model's own vocabulary |
 | Tokenizer folder from the GGUF (vocab, merges, types, chat template) | `tools/naive_extract_tokenizer.py` | wrote the pack folder; the server loads it |
-| Run config and script (port 8081, next to the running 8080 engine) | `strata-naive-naive.json`, `run-naive.sh` | the server starts, lists the model, refuses requests in 0.3 s |
+| Run config and script (port 8081, next to the running 8080 engine) | `strata-naive-naive.json`, `run-naive.sh` | the server starts, lists the model, answers requests (the smoke section below) |
 | Trunk arithmetic (RMSNorm, split-half RoPE, sink attention, FP8 E4M3, index LayerNorm, stable top-k, router, combine, SiLU) | `include/strata/naive/kernels.hpp` | CPU-only header; every function cites its NaiveRT reference |
 | A numpy oracle for that arithmetic + fixtures | `tools/naive_kernels_oracle.py`, `tests/naive/fixtures/` | independent transcription of the same references; 64 fixture arrays |
 | Parity test (this header vs the oracle's fixtures) | `tests/naive/test_naive_kernels.cpp` (`ctest -R naive_kernels_test`) | 18 checks pass: FP8 codes exact, floats within accumulation tolerance |
@@ -222,43 +223,99 @@ tolerance rules as the layer test apply (a bf16-rounded array one bf16 ulp wide;
 the router weights, the fp8-dequantised rows - 1e-4, both sides summing in double; ids exact).  The
 GQA head mapping and the BF16-indexer deviation are read, not measured, as the section above says.
 
-What the trunk slice does **not** close: the running cache (every layer here starts from its own
-fixture rows), the 48-layer loop, sampling, and the draft. A prompt is still refused; the numbers
-above pin the forward of a two-layer slice, not a served generation.
+What the trunk slice does **not** close on its own: the running cache (every layer here starts from
+its own fixture rows), the 48-layer loop, sampling, and the draft - the whole-loop section below
+builds exactly those.  The numbers above pin the forward of a two-layer slice over real bytes.
 
-## What is left before it answers a prompt
+## The whole loop runs, tested against an independent numpy session
 
-The loader, the router, the first two layers, the expert FFN, the DSA layer and a two-layer trunk
-slice now work over the real file (tested above); steps 1-5 below are closed. What remains is the
-48-layer runtime around them and the draft.
+The pieces above are per-layer slices.  What joins them into a running session is
+`include/strata/naive/runtime.hpp`: the row-by-row forward over all layers (K cached after rope, V
+after the value fold, one bf16 round into the cache; the DSA layers also cache the index key
+dequantised from its E4M3 code), the full-history DSA cache and the window ring (capacity
+window + max(chunk, session history), so a rewind inside the ring never re-reads the prompt), the
+selection rule (at or below `index_top_k` visible rows every row wins - the identity the authors'
+runtime publishes without computing the index query; above it the runtime computes the E4M3 index
+logits and the stable top-k), the router over the layer's own expert slice, the sampler (greedy,
+temperature, top-k, min-p, top-p, reseeded per request), and `rewind` to the common prefix a served
+multi-turn request needs.  `src/naive/naive_main.cpp` wires it into the serve protocol: the prompt's
+rows prefill (PP every 16 rows), the last row's logits sample the first token, decode continues from
+the caches, and `DONE` carries the timings and the stop reason; a request whose forward fails answers
+`ERR` and leaves the engine idle, never a half-token.
 
-1. **Weight loader**: landed as `include/strata/naive/loader.hpp` - see the section above. The BF16
-   indexer and the F32 router repacks ride on the same `load_tensor_f32` path as layer work needs them.
-2. **Router**: closed end to end - `kernels.hpp::moe_route` over the model's own layer-1 router weight
-   and bias equals the python oracle's top-8 ids and renormalised weights, in the loader test.
-   Left for later: per-token batching and the recorded-prompt check once a full forward exists.
-3. **Dense layer 0 + one window layer end to end**: landed - `gemv_dequant` over the real Q8_0/Q6_K
-   weights drives the layer-0 MLP and the window layer's attention, within one bf16 ulp of the numpy
-   reference (the section above). Left for later: the residual adds and per-token batching, which need
-   the surrounding layers.
-4. **IQ2 experts** (IQ2_XXS gate/up, IQ2_XS down): landed - `gemv_dequant_3d` reads one expert's byte
-   window and decodes it through ggml's `to_float`; the layer-1 FFN for a token (one expert, and all
-   eight in the trunk case) equals the numpy IQ2 reference within one bf16 ulp (the moe and trunk
-   cases above). The combine and activation were already tested.
-5. **DSA layers**: landed - the projections over the real BF16 weights, the E4M3 selection cache, the
-   index logits and the stable top-k run in `dsa_chain` and equal `run_attn_dsa.py` on real weights
-   (the dsa case above). Left for later: the full-history KV across all 9 DSA layers and the running
-   cache, which need the 48-layer loop.
-6. **Draft**: the DSpark block drafter (5 layers, taps, Markov head, confidence) and verification.
+`tests/naive/test_naive_runtime.cpp` (`ctest -R naive_runtime_test`) runs that loop against an
+independent numpy session (`tools/naive_runtime_reference.py` - the vectorised decoders, no shared
+code) over a synthetic GGUF that carries the architecture: 3 layers (DSA + dense, SWA + MoE,
+DSA + MoE), 16 experts top-8, IQ2_XXS/XS expert stacks, Q6_K/Q8_0 attention, BF16 indexer,
+window 8, top_k 2, sinks, the two thetas, 152 576 vocab.  The model (~1 GB) is written into the
+build directory, not committed.  The checks:
+
+- every prompt row's DSA selection and router pick, per layer - exact ints;
+- the prompt's logits (152 576 values) and its greedy next token (exact id);
+- one decoded follow-up row computed from the caches - logits and next token;
+- a branched prompt: `common_prefix`, the rewind cut, the branch's logits after re-feeding the
+  shared rows - and those logits are BIT-identical to the same prompt run as a fresh prefill;
+- the ring's reach: a rewind just inside it succeeds, one row past it is refused.
+
+The two sides match to the accumulation ORDER, not just to a tolerance: the reference walks every
+dot with k ascending and vectorised across output rows, so each element is its own IEEE addition -
+bit-identical to the scalar C++ loop - and rounds f32 products, the libm `expf` silu calls, the
+router sigmoid and the renormalisation exactly where the C++ rounds them.  That strictness is what
+a random-weight model needs: its logits are sums of 4096 cancelling products, and a last-bit
+difference in one dot moves one of them by tens of percent.  Every such difference found was a real
+bug on one side: a pinned fp16 `d` at the wrong offset in the test model (Q6_K keeps it as the
+block's LAST two bytes, IQ2 as the first two), a router renormalisation the reference narrowed to
+f32 before multiplying, and before all of that a vacuous pass - the fixture checker treats NaN==NaN
+as a match, so an all-NaN run satisfies every tolerance, and it was the finiteness assertion the
+test now makes before comparing that caught it.  With those fixed, all 93 named fingerprints of
+the branch prompt (the embedding, every norm, the cached k/v/index rows, attention, every FFN
+stage) are bit-identical between the two implementations, and the logits agree to within the test's
+bf16 tolerance.  `ctest -R naive` is 5/5 in 91.3 s on this machine (the runtime test itself 85.6 s:
+model write ~33 s, the numpy reference ~50 s, the C++ run seconds).
+
+## A served request answers, on the real file
+
+`sh run-naive.sh` starts the web server on port 8081 (the Flash-Next engine on 8080 untouched) and
+`strata-naive` comes to READY after its gates; the first chat request then runs the whole loop over
+the 4-shard 81 GiB file:
+
+```sh
+curl http://127.0.0.1:8081/v1/chat/completions \
+  -d '{"model":"naive-n0.5-flash-mq87","messages":[{"role":"user",
+       "content":"Reply with exactly one word: hello"}],"max_tokens":4,"temperature":0}'
+```
+
+Measured on this machine (94 GB of RAM with the Flash-Next engine holding most of it, NVMe, 32
+threads): the 49-token prompt prefilled in 620 s (12.7 s/token - the weights are read through the
+page cache and the two engines compete for it, so the first pass pays the disk), decode ran 4
+tokens at 11.2 s/token, and the model answered - a thinking model, and the server splits its
+`<think>` stream into `reasoning_content`: `"<think>\nWe need"`, `finish_reason: length` at the
+requested 4 tokens.  The follow-up branch of that conversation (one more user turn on top) reported
+`cached_tokens: 49` - the engine found the common prefix, rewound its caches to it and re-fed only
+the 19 new rows (11.6 s/row still cache-starved, decode 9.7 s/token) - the serve path's rewind and
+session reuse, measured end to end.  These are verify-only numbers with the draft off; nothing in
+them depends on GPU, CUDA or ggml-cuda.
+
+## What is left after the first answer
+
+The loader, the router, the layers, the expert FFN, the DSA layer, the running caches, the sampler
+and the serve decode-loop are built and tested (the sections above), and the engine answers a served
+request on the real 4-shard file (the smoke line above).  What remains is the opt-in draft and the
+capacity and speed work around the loop:
+
+1. **Draft**: the DSpark block drafter (5 layers, taps, Markov head, confidence) and verification.
    Opt-in: the port serves correctly without it.  No numpy reference exists for it yet, so it is not built.
-7. **Long context**: the window/index caches at 262k and 1M, admission checked before start.
+2. **Long context**: the window/index caches at 262k and 1M, admission checked before start.
+3. **Speed**: this path is written to be simple and checkable first.  One measured consequence: the
+   weights are read from the 81 GiB of shards through the page cache as each row needs them, so a
+   cold start pays the disk before its first token and a warm session pays only the routed expert
+   slices it touches.  Resident slices, a better thread split and the draft are the speed work that
+   follows once the numbers are pinned.
 
-The model's family reference (its recipe names it) is the upstream Rust runtime; the read-state table
-above is what Strata's own path replaces.  Every number here was measured on this machine. The loader,
-the router, the first two layers, the expert FFN, the DSA layer and a two-layer trunk slice over real
-weights have been run (the four `ctest -R naive` tests, model included); the 48-layer loop, sampling
-and the draft have no measurement yet, because none of them exists yet - this page says so rather than
-implying a run.
+The model's family reference (its recipe names it) is the upstream Rust runtime.  Everything the
+page claims as measured has been run on this machine: the arithmetic against the numpy oracle, the
+loader and the layers against the model's own bytes, the whole loop against an independent numpy
+session, and one served chat request answered end to end on the real file.
 
 ## Files named by this port
 
@@ -278,5 +335,9 @@ implying a run.
   trunk reference), `tests/naive/test_naive_moe_dsa.cpp` (`ctest -R naive_moe_dsa_test`), and the
   50 `moe_layer1__` / `dsa_layer0__` / `trunk__` fixture arrays (15 MB in the whole directory)
 - `tools/naive_extract_tokenizer.py`, `tools/strata_tokenizer.py` (the `qwen2` rule), `tools/test_strata_tokenizer.py`
+- `include/strata/naive/runtime.hpp` (the running session: caches, ring, rewind, sampler, serve
+  wiring), `tools/naive_runtime_reference.py` (the independent numpy session, accumulation-order
+  mirrored), `tests/naive/test_naive_runtime.cpp` (`ctest -R naive_runtime_test`; it writes the ~1 GB
+  synthetic GGUF into the build directory and refuses to compare anything that is not finite)
 - `strata-naive-naive.json`, `run-naive.sh`
 - `Strata-data/packs/naive-n05-flash/tokenizer/` (five files extracted from the model's GGUF)

@@ -248,7 +248,8 @@ inline void stable_topk(const float* v, int n, int k, int* out) {
     if (k > n) k = n;
     int cnt = 0;
     for (int i = 0; i < n; ++i) {
-        int rank = 0;
+        if (!(v[i] == v[i])) continue;                            // NaN ranks nowhere: it never wins,
+        int rank = 0;                                             // and it cannot break the k-write bound
         for (int j = 0; j < n; ++j) {
             if (v[j] > v[i]) ++rank;
             else if (j < i && v[j] == v[i]) ++rank;          // lower index wins a tie

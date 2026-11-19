@@ -298,13 +298,20 @@ target_link_libraries(strata-dequant PRIVATE strata_artifact)
 target_compile_definitions(strata-dequant PRIVATE STRATA_DEQUANT_SELFTEST)
 
 # Naive-N0.5-Flash (`naive_n05_flash`): the Naive engine path (src/naive), its own executable, like
-# strata-dsv41.  It is metadata-only in this build - the geometry and the tensor inventory from the
-# model's own GGUF (include/strata/naive/), and an honest refusal where the trunk forward is not yet -
-# so it needs no GPU and no backend, and changes no existing target.  OFF by default.
+# strata-dsv41.  It runs on the CPU - the geometry and the tensor inventory from the model's own
+# GGUF (include/strata/naive/), the trunk's arithmetic and the runtime caches (runtime.hpp) - so it
+# needs no GPU and no backend, and changes no existing target.  OFF by default.
 option(STRATA_BUILD_NAIVE "Build the Naive-N0.5-Flash engine path (strata-naive)" OFF)
 if(STRATA_BUILD_NAIVE)
+  # The CPU forward's row pool.  Sought only inside this opt-in block and linked only into these
+  # targets, so no existing target's flags move; without OpenMP the runtime compiles and runs its
+  # rows one at a time (the pragmas are guarded), just slower.
+  find_package(OpenMP COMPONENTS CXX QUIET)
   add_executable(strata-naive src/naive/naive_main.cpp)
-  target_link_libraries(strata-naive PRIVATE strata_artifact)
+  target_link_libraries(strata-naive PRIVATE strata_artifact ggml-base)
+  if(OpenMP_CXX_FOUND)
+    target_link_libraries(strata-naive PRIVATE OpenMP::OpenMP_CXX)
+  endif()
   if(STRATA_BUILD_TESTS)
     # the trunk's arithmetic (include/strata/naive/kernels.hpp) against the numpy oracle's fixtures
     # (tools/naive_kernels_oracle.py, a transcription of NaiveRT's torch references): pure CPU, no model.
@@ -342,6 +349,21 @@ if(STRATA_BUILD_NAIVE)
     add_test(NAME naive_moe_dsa_test
              COMMAND naive_moe_dsa_test ${CMAKE_CURRENT_SOURCE_DIR}/tests/naive/fixtures)
     set_tests_properties(naive_moe_dsa_test PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 1200)
+    # the runtime (include/strata/naive/runtime.hpp): the 48-layer loop's STATE - the DSA/window
+    # caches, the session rewind, the selection's fast path, the sampler and the GEN parse - run
+    # over a small synthetic naive GGUF this test writes, and checked against the numpy full-model
+    # reference tools/naive_runtime_reference.py computes for the same file (absent python/numpy
+    # -> skip 77; the reference shares no code with the runtime beyond the byte-window rules).
+    add_executable(naive_runtime_test tests/naive/test_naive_runtime.cpp)
+    target_include_directories(naive_runtime_test PRIVATE include)
+    target_link_libraries(naive_runtime_test PRIVATE strata_artifact ggml-base)
+    if(OpenMP_CXX_FOUND)
+      target_link_libraries(naive_runtime_test PRIVATE OpenMP::OpenMP_CXX)
+    endif()
+    add_test(NAME naive_runtime_test
+             COMMAND naive_runtime_test ${CMAKE_CURRENT_SOURCE_DIR}/tests/naive/fixtures
+                     ${CMAKE_CURRENT_BINARY_DIR}/naive_runtime_scratch)
+    set_tests_properties(naive_runtime_test PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 2400)
   endif()
 endif()
 
