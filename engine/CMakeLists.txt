@@ -296,7 +296,7 @@ if(STRATA_BUILD_NAIVE)
   endif()
   if(STRATA_BUILD_TESTS)
     # the trunk's arithmetic (include/strata/naive/kernels.hpp) against the numpy oracle's fixtures
-    # (tools/naive_kernels_oracle.py, a transcription of NaiveRT's torch references): pure CPU, no model.
+    # (terminal/tools/naive_kernels_oracle.py, a transcription of NaiveRT's torch references): pure CPU, no model.
     add_executable(naive_kernels_test tests/naive/test_naive_kernels.cpp)
     target_include_directories(naive_kernels_test PRIVATE include)
     add_test(NAME naive_kernels_test
@@ -312,7 +312,7 @@ if(STRATA_BUILD_NAIVE)
     set_tests_properties(naive_loader_test PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 300)
     # one quantised GEMV feeding the tested kernels as real layers (docs/NAIVE.md step 3): a written
     # synthetic GGUF always runs; the real model's Q8_0/Q6_K weights drive the layer-0 MLP and the
-    # layer-1 sliding-window attention against fixtures from tools/naive_real_layer_fixture.py.
+    # layer-1 sliding-window attention against fixtures from terminal/tools/naive_real_layer_fixture.py.
     # The real pass decodes about 2.4 G elements single-threaded, hence the longer timeout.
     add_executable(naive_layer_test tests/naive/test_naive_layer.cpp)
     target_include_directories(naive_layer_test PRIVATE include)
@@ -321,9 +321,9 @@ if(STRATA_BUILD_NAIVE)
              COMMAND naive_layer_test ${CMAKE_CURRENT_SOURCE_DIR}/tests/naive/fixtures)
     set_tests_properties(naive_layer_test PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 1200)
     # the IQ2 MoE FFN, the DSA (indexer) layer and the two-layer trunk (docs/NAIVE.md steps 4-5):
-    # ggml's compiled IQ2_XXS/IQ2_XS decoders against the independent numpy ones (tools/naive_iq2.py),
+    # ggml's compiled IQ2_XXS/IQ2_XS decoders against the independent numpy ones (terminal/tools/naive_iq2.py),
     # through the one-expert window loader (gemv_dequant_3d) and the column-window loader
-    # (load_tensor_cols). Fixtures from tools/naive_real_moe_dsa_fixture.py; absent model -> exit 77.
+    # (load_tensor_cols). Fixtures from terminal/tools/naive_real_moe_dsa_fixture.py; absent model -> exit 77.
     # The trunk's MoE FFN (8 experts) and the output head decode about 1 G elements single-threaded.
     add_executable(naive_moe_dsa_test tests/naive/test_naive_moe_dsa.cpp)
     target_include_directories(naive_moe_dsa_test PRIVATE include)
@@ -334,7 +334,7 @@ if(STRATA_BUILD_NAIVE)
     # the runtime (include/strata/naive/runtime.hpp): the 48-layer loop's STATE - the DSA/window
     # caches, the session rewind, the selection's fast path, the sampler and the GEN parse - run
     # over a small synthetic naive GGUF this test writes, and checked against the numpy full-model
-    # reference tools/naive_runtime_reference.py computes for the same file (absent python/numpy
+    # reference terminal/tools/naive_runtime_reference.py computes for the same file (absent python/numpy
     # -> skip 77; the reference shares no code with the runtime beyond the byte-window rules).
     add_executable(naive_runtime_test tests/naive/test_naive_runtime.cpp)
     target_include_directories(naive_runtime_test PRIVATE include)

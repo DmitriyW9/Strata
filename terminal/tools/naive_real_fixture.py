@@ -20,10 +20,10 @@
 # would mean transcribing ggml's IQ2 codebook, which is exactly what the port refuses to do; their
 # raw-byte identity and the sign property are checked in C++ against ggml itself instead.
 #
-#   python tools/naive_real_fixture.py [model-shard-1.gguf] [outdir]
+#   python terminal/tools/naive_real_fixture.py [model-shard-1.gguf] [outdir]
 #     default model:  /home/dmitriy/projects/ai/LLM/models/Naive-N0.5-Flash-MQ87/
 #                     Naive-N0.5-Flash-MQ87-00001-of-00004.gguf
-#     default outdir: tests/naive/fixtures
+#     default outdir: engine/tests/naive/fixtures
 
 from __future__ import annotations
 
@@ -62,9 +62,9 @@ def read_tensor(gguf: GGUFFile, fh, name: str) -> tuple[np.ndarray, np.ndarray]:
 
 
 def main() -> None:
-    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    here = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))   # the repo root, two levels above terminal/tools/
     model = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else DEFAULT_MODEL)
-    outdir = sys.argv[2] if len(sys.argv) > 2 else os.path.join(here, "tests", "naive", "fixtures")
+    outdir = sys.argv[2] if len(sys.argv) > 2 else os.path.join(here, "engine", "tests", "naive", "fixtures")
     os.makedirs(outdir, exist_ok=True)
 
     gguf = GGUFFile(model)

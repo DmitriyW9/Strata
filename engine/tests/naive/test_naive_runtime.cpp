@@ -4,7 +4,7 @@
 // suites do not cover - the running caches (DSA full-history K/V + E4M3 index keys, the window
 // ring), the session rewind, the selection fast path, the sampler, and the GEN line - by running a
 // whole small naive model end to end and comparing against an INDEPENDENT numpy reference
-// (tools/naive_runtime_reference.py) that walks the same GGUF bytes with the vectorised decoders.
+// (terminal/tools/naive_runtime_reference.py) that walks the same GGUF bytes with the vectorised decoders.
 //
 //   test_naive_runtime [repo-fixtures-dir] [scratch-dir] [case]
 //     argv[1] is the CTest fixtures dir (its grandgrandparent is the repo root, where tools/ is);
@@ -462,7 +462,7 @@ int model_checks(const std::filesystem::path& scratch, const std::filesystem::pa
     // The reference: python3 + the vectorised numpy decoders.  Absent or failing -> CTest skip.
     const auto refdir = scratch / "ref";
     std::filesystem::create_directories(refdir);
-    const std::string cmd = "python3 '" + (repo_root / "tools/naive_runtime_reference.py").string() +
+    const std::string cmd = "python3 '" + (repo_root / "terminal/tools/naive_runtime_reference.py").string() +
                             "' '" + gguf_path.string() + "' '" + refdir.string() + "'";
     const int rc = std::system(cmd.c_str());
     if (rc != 0) {
@@ -608,10 +608,10 @@ int main(int argc, char** argv) {
     std::error_code ec;
     std::filesystem::create_directories(scratch, ec);
     // The repo root, found from the fixtures dir CTest passes (…/tests/naive/fixtures) or from the
-    // cwd: the first parent that holds tools/naive_runtime_reference.py, the numpy reference below.
+    // cwd: the first parent that holds terminal/tools/naive_runtime_reference.py, the numpy reference below.
     std::filesystem::path root = argc > 1 ? std::filesystem::path(argv[1]) : "tests/naive/fixtures";
     root = std::filesystem::weakly_canonical(root.parent_path().parent_path().parent_path(), ec);
-    for (int up = 0; up < 5 && !std::filesystem::exists(root / "tools/naive_runtime_reference.py"); ++up)
+    for (int up = 0; up < 5 && !std::filesystem::exists(root / "terminal/tools/naive_runtime_reference.py"); ++up)
         root = root.parent_path();
     const std::string only = argc > 3 ? argv[3] : "all";
 

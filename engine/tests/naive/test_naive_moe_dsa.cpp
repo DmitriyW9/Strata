@@ -1,11 +1,11 @@
 // tests/naive/test_naive_moe_dsa.cpp - the IQ2 MoE FFN, the DSA (indexer) layer and the two-layer
 // trunk, run through the port (loader.hpp + kernels.hpp, ggml's compiled `to_float` for every
-// quantised weight), against fixtures that tools/naive_real_moe_dsa_fixture.py computes from the
+// quantised weight), against fixtures that terminal/tools/naive_real_moe_dsa_fixture.py computes from the
 // model's real weights with independent numpy decoders.  This covers steps 4-5 (and the trunk half
 // of 7) of docs/NAIVE.md; test_naive_layer.cpp covers its steps 1-3.
 //
 //   test_naive_moe_dsa [fixtures-dir] [model-any-shard.gguf] [case]
-//     fixtures default: tests/naive/fixtures  (regenerate: python tools/naive_real_moe_dsa_fixture.py)
+//     fixtures default: tests/naive/fixtures  (regenerate: python terminal/tools/naive_real_moe_dsa_fixture.py)
 //     model default:    /home/dmitriy/projects/ai/LLM/models/Naive-N0.5-Flash-MQ87/
 //                       Naive-N0.5-Flash-MQ87-00001-of-00004.gguf
 //     case:             moe | dsa | trunk | all (default all)
@@ -35,8 +35,8 @@
 //            against the output head - compared by the top-5 ids (exact ints) and their values.
 //
 // INDEPENDENCE: the fixtures decode IQ2_XXS/IQ2_XS with the vectorised numpy transcriptions of
-// tools/naive_iq2.py (self-tested bit-exactly against a literal transcription of ggml's decode
-// loops) and Q8_0/Q6_K with the layout decoders of tools/naive_real_layer_fixture.py; this file
+// terminal/tools/naive_iq2.py (self-tested bit-exactly against a literal transcription of ggml's decode
+// loops) and Q8_0/Q6_K with the layout decoders of terminal/tools/naive_real_layer_fixture.py; this file
 // decodes the same bytes through ggml's compiled `to_float` and runs kernels.hpp.  A wrong expert
 // window, a swapped grid half, or a mis-folded scale nibble moves values by O(100%), not 0.8%.
 //

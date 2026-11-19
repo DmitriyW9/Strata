@@ -5,7 +5,7 @@
 // This is the trunk's arithmetic WITHOUT the GPU kernels.  NaiveRT runs the same math through Triton
 // and sm_103a CUDA kernels that will not compile on this box (sm_86 / sm_70), so what is borrowed
 // here is the *formula*, not the code: every function below mirrors a named reference in NaiveRT's
-// own torch tests and model code, and `tools/naive_kernels_oracle.py` (a numpy transcription of the
+// own torch tests and model code, and `terminal/tools/naive_kernels_oracle.py` (a numpy transcription of the
 // same references) plus `tests/naive/test_naive_kernels.cpp` (this header against those fixtures)
 // hold the C++ to that reference.  Nothing here loads a weight or touches a GPU; a later loader
 // feeds these functions real tensors, and a later GPU backend can replace them with kernels.

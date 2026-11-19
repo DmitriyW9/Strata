@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""tools/naive_extract_tokenizer.py - write a pack-style tokenizer folder from a Naive-N0.5-Flash GGUF.
+"""terminal/tools/naive_extract_tokenizer.py - write a pack-style tokenizer folder from a Naive-N0.5-Flash GGUF.
 
 The server (serve/server.py) reads a tokenizer folder of vocab.json + merges.txt + token_type.json +
 tokenizer.json (+ chat_template.jinja): the same five files a pack carries.  The GGUF holds all of them
@@ -7,7 +7,7 @@ as metadata (tokenizer.ggml.* and tokenizer.chat_template); this copies them out
 the GGUF's own pre-tokenizer name (tokenizer.ggml.pre = "qwen2" on MQ87) in tokenizer.json, the way
 tools/dsv41/pack_gguf.py's write_tokenizer does for a DeepSeek pack.
 
-  python tools/naive_extract_tokenizer.py --model <shard1.gguf> --out <dir>
+  python terminal/terminal/tools/naive_extract_tokenizer.py --model <shard1.gguf> --out <dir>
 
 Nothing is invented: a GGUF without a tokenizer is refused, like pack_gguf's version.
 """

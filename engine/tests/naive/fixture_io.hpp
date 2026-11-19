@@ -4,7 +4,7 @@
 // int32; flat arrays use rows=count, cols=1) followed by the raw little-endian values. The header
 // stays human-scannable (`head -1` shows the shape); the body is exact float32/int32, which is what
 // lets a 1M-element router matrix round-trip to C++ at its true bits without 17 MB of text. Both
-// generators (tools/naive_kernels_oracle.py, tools/naive_real_fixture.py) write this format; both
+// generators (terminal/tools/naive_kernels_oracle.py, terminal/tools/naive_real_fixture.py) write this format; both
 // tests (test_naive_kernels.cpp, test_naive_loader.cpp) read it through the helpers here.
 //
 // Header-only like the code it tests: two executables including one definition cannot drift.

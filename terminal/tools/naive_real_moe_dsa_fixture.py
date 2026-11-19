@@ -54,9 +54,9 @@
 # Model.raw_range - the same window shape the C++ reader (gemv_dequant_3d) opens.  The head reads
 # the output table in 8192-row chunks for the same reason.
 #
-#   python tools/naive_real_moe_dsa_fixture.py [model-shard-1.gguf] [outdir]
+#   python terminal/tools/naive_real_moe_dsa_fixture.py [model-shard-1.gguf] [outdir]
 #     default model:  /home/dmitriy/projects/ai/LLM/models/Naive-N0.5-Flash-MQ87/...00001-of-00004.gguf
-#     default outdir: tests/naive/fixtures
+#     default outdir: engine/tests/naive/fixtures
 
 from __future__ import annotations
 
@@ -365,9 +365,9 @@ def trunk_case(m: Model, token: int, outdir: str) -> None:
 
 
 def main() -> None:
-    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    here = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))   # the repo root, two levels above terminal/tools/
     model = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else DEFAULT_MODEL)
-    outdir = sys.argv[2] if len(sys.argv) > 2 else os.path.join(here, "tests", "naive", "fixtures")
+    outdir = sys.argv[2] if len(sys.argv) > 2 else os.path.join(here, "engine", "tests", "naive", "fixtures")
     os.makedirs(outdir, exist_ok=True)
 
     m = Model(model)

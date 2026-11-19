@@ -32,6 +32,7 @@ td.log
 /build/
 /engine/third_party/llama.cpp
 /terminal/third_party/llama.cpp
+/third_party/llama.cpp
 /terminal/models/
 /models/
 /terminal/packs/

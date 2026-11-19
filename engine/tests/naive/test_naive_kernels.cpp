@@ -1,6 +1,6 @@
 // tests/naive/test_naive_kernels.cpp - the Naive-N0.5-Flash trunk arithmetic against a reference.
 //
-// Each sub-command reads one fixture set (written by tools/naive_kernels_oracle.py, a numpy
+// Each sub-command reads one fixture set (written by terminal/tools/naive_kernels_oracle.py, a numpy
 // transcription of the model authors' NaiveRT torch references), runs the matching function from
 // include/strata/naive/kernels.hpp over the fixture's inputs, and compares the result to the fixture's
 // recorded reference: integers (indices, FP8 codes) must match exactly, floats within a tolerance set
@@ -14,7 +14,7 @@
 //   test_naive_kernels [fixtures-dir]     all cases; nonzero exit and a printed reason on any mismatch
 //
 // The fixtures live in tests/naive/fixtures by default (committed); regenerate with
-//   python tools/naive_kernels_oracle.py
+//   python terminal/tools/naive_kernels_oracle.py
 // The fixture reader lives in fixture_io.hpp, shared with test_naive_loader.cpp.
 
 #include "fixture_io.hpp"  // the shared fixture reader, also used by test_naive_loader.cpp

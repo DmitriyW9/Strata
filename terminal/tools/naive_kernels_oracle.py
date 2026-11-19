@@ -17,7 +17,7 @@
 # Writes binary fixtures (an ASCII "dtype rows cols" header + raw little-endian values; see write_arr)
 # that the C++ test reads at exact float32 bits, with `--print CASE` for a text view of any case.
 #
-#   python tools/naive_kernels_oracle.py [outdir]      (default: tests/naive/fixtures)
+#   python terminal/tools/naive_kernels_oracle.py [outdir]      (default: engine/tests/naive/fixtures)
 
 from __future__ import annotations
 
@@ -312,8 +312,8 @@ def gen(outdir: str) -> int:
 
 
 def main() -> None:
-    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    default = os.path.join(here, "tests", "naive", "fixtures")
+    here = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))   # the repo root, two levels above terminal/tools/
+    default = os.path.join(here, "engine", "tests", "naive", "fixtures")
     args = sys.argv[1:]
     if args and args[0] == "--print":
         dump_case(default, args[1])

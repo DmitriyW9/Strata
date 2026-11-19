@@ -1,7 +1,7 @@
 // tests/naive/test_naive_loader.cpp - the Naive-N0.5-Flash weight loader (include/strata/naive/
 // loader.hpp) against three things: ggml's own type traits, a synthetic GGUF whose bytes this file
 // wrote, and - when the model is present - the real weights, through fixtures generated straight from
-// the shards (tools/naive_real_fixture.py).
+// the shards (terminal/tools/naive_real_fixture.py).
 //
 // What is checked, and why this and not more:
 //   * Three independent byte counts per tensor must agree: the loader's `ggml_payload_bytes` (ggml's
@@ -29,7 +29,7 @@
 //     shards and the payload lies inside its file; the layer-1 router window hashes to the file's
 //     bytes; F32 loads are byte-exact; and kernels.hpp's tested router over the REAL weights
 //     reproduces the oracle's experts and weights (fixtures `real_router`, `raw_router`,
-//     `dequant_f32` from tools/naive_real_fixture.py).
+//     `dequant_f32` from terminal/tools/naive_real_fixture.py).
 //
 //   test_naive_loader [fixtures-dir] [model-any-shard.gguf]
 //     fixtures default: tests/naive/fixtures
@@ -38,7 +38,7 @@
 //     Model file absent -> the model part prints its skip line and a clean run exits 77 (CTest's
 //     skip code); the model-free parts always run.
 //
-// Regenerate the real fixtures with:  python tools/naive_real_fixture.py
+// Regenerate the real fixtures with:  python terminal/tools/naive_real_fixture.py
 
 #include "fixture_io.hpp"  // the shared fixture reader, also used by test_naive_kernels.cpp
 #include "strata/naive/kernels.hpp"
@@ -80,7 +80,7 @@ void check_ints(const std::string& c, const char* what, const std::vector<int>& 
     naive_test::check_ints(c, what, got, ref, g_failures);
 }
 
-uint32_t fnv1a(const uint8_t* p, size_t n) {  // the same 32-bit FNV-1a tools/naive_real_fixture.py uses
+uint32_t fnv1a(const uint8_t* p, size_t n) {  // the same 32-bit FNV-1a terminal/tools/naive_real_fixture.py uses
     uint32_t h = 0x811C9DC5u;
     for (size_t i = 0; i < n; ++i) {
         h ^= p[i];
@@ -411,7 +411,7 @@ bool part_d_real() {
     check(all_in, "real model: every inventory tensor lies inside its shard");
 
     // Fixture `raw_router`: the window the loader must return for the router tensor - size and the
-    // FNV-1a of the bytes, both taken from the file by tools/naive_real_fixture.py.
+    // FNV-1a of the bytes, both taken from the file by terminal/tools/naive_real_fixture.py.
     Arr hash, len, elems, type_id;
     if (!naive_test::load(g_dir, "raw_router", "bytes_hash", hash, g_failures)) return true;
     if (!naive_test::load(g_dir, "raw_router", "bytes_len", len, g_failures)) return true;

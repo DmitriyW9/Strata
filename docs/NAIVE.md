@@ -54,16 +54,16 @@ So the port is its own binary, and `strata`'s default path stays byte-identical.
 | `strata-naive` binary (`--check`, serve INFO/READY, the decode loop) | `engine/src/naive/naive_main.cpp`, `engine/include/strata/naive/runtime.hpp` | builds CPU-only; serves requests (the smoke section below) |
 | CMake target, OFF by default | `engine/CMakeLists.txt` (`STRATA_BUILD_NAIVE`) | does not change any existing target |
 | `qwen2` pre-tokenizer (llama.cpp's QWEN2 rule, QWEN35 minus `\p{M}`) | `tools/strata_tokenizer.py` | unit tests pass; encodes/round-trips the model's own vocabulary |
-| Tokenizer folder from the GGUF (vocab, merges, types, chat template) | `tools/naive_extract_tokenizer.py` | wrote the pack folder; the server loads it |
+| Tokenizer folder from the GGUF (vocab, merges, types, chat template) | `terminal/tools/naive_extract_tokenizer.py` | wrote the pack folder; the server loads it |
 | Run config and script (port 8081, next to the running 8080 engine) | `strata-naive-naive.json`, `run-naive.sh` | the server starts, lists the model, answers requests (the smoke section below) |
 | Trunk arithmetic (RMSNorm, split-half RoPE, sink attention, FP8 E4M3, index LayerNorm, stable top-k, router, combine, SiLU) | `engine/include/strata/naive/kernels.hpp` | CPU-only header; every function cites its NaiveRT reference |
-| A numpy oracle for that arithmetic + fixtures | `tools/naive_kernels_oracle.py`, `engine/tests/naive/fixtures/` | independent transcription of the same references; 64 fixture arrays |
+| A numpy oracle for that arithmetic + fixtures | `terminal/tools/naive_kernels_oracle.py`, `engine/tests/naive/fixtures/` | independent transcription of the same references; 64 fixture arrays |
 | Parity test (this header vs the oracle's fixtures) | `engine/tests/naive/test_naive_kernels.cpp` (`ctest -R naive_kernels_test`) | 18 checks pass: FP8 codes exact, floats within accumulation tolerance |
 | Weight loader (mmap window, ggml's own dequant, F32 copy) | `engine/include/strata/naive/loader.hpp` | CPU-only header; dequant is `ggml_get_type_traits(t).to_float`, not a re-derived codebook |
-| Real-weight fixtures (router, bias, norm, raw bytes - straight from the model file) | `tools/naive_real_fixture.py`, `engine/tests/naive/fixtures/real_*`, `raw_router/`, `dequant_f32/` | reads shard 1 with plain `seek`/`read`; stores the file's own FNV-1a so C++ compares against the bytes, not against python |
+| Real-weight fixtures (router, bias, norm, raw bytes - straight from the model file) | `terminal/tools/naive_real_fixture.py`, `engine/tests/naive/fixtures/real_*`, `raw_router/`, `dequant_f32/` | reads shard 1 with plain `seek`/`read`; stores the file's own FNV-1a so C++ compares against the bytes, not against python |
 | Loader test (ggml tables, a synthetic GGUF, IQ2 sign property, the real model) | `engine/tests/naive/test_naive_loader.cpp` (`ctest -R naive_loader_test`) | passes with the model (shards, 613-tensor sizes, byte windows, the router over real weights); prints a skip line and exits 77 without it |
 | Quantised GEMV (`gemv_dequant`: ggml's decoder one output row at a time, no resident weight) + `rope_rows` | `engine/include/strata/naive/loader.hpp`, `engine/include/strata/naive/kernels.hpp` | CPU-only header; the row, not the whole weight, must be whole blocks |
-| Real-layer fixtures (layer-0 MLP, window attention, numpy decoders written from the format, never calling ggml) | `tools/naive_real_layer_fixture.py`, `engine/tests/naive/fixtures/layer0_dense__*`, `swa_small__*`, `swa_window__*`, `gemv_probe__*` | 22 arrays (14 MB); the generator self-tests its Q6_K decoder against a literal transcription of ggml's loop and its Q8_0 decoder bit-exact |
+| Real-layer fixtures (layer-0 MLP, window attention, numpy decoders written from the format, never calling ggml) | `terminal/tools/naive_real_layer_fixture.py`, `engine/tests/naive/fixtures/layer0_dense__*`, `swa_small__*`, `swa_window__*`, `gemv_probe__*` | 22 arrays (14 MB); the generator self-tests its Q6_K decoder against a literal transcription of ggml's loop and its Q8_0 decoder bit-exact |
 | Layer test (GEMV + norms + RoPE + sink attention + SwiGLU over the real Q8_0/Q6_K weights) | `engine/tests/naive/test_naive_layer.cpp` (`ctest -R naive_layer_test`) | passes with the model in 1.6 s (every tensor within one bf16 ulp of the numpy reference); skip line and exit 77 without it |
 
 `--check` needs no GPU and loads no weights:
@@ -84,7 +84,7 @@ without it (DSA); the index-key LayerNorm; FP8 E4M3 row quantisation and the ind
 renormalised weights; the weighted expert combine; and the SwiGLU activation.
 
 Because NaiveRT's kernels target Blackwell and torch is absent here, the check is a **numpy oracle**
-(`tools/naive_kernels_oracle.py`) - the same references, transcribed by hand into numpy with different
+(`terminal/tools/naive_kernels_oracle.py`) - the same references, transcribed by hand into numpy with different
 algorithms where they can differ (a table search for FP8 where the C++ splits with `frexp`, pairwise
 reductions where the C++ sums in double). It writes binary fixtures (`engine/tests/naive/fixtures/`: an ASCII
 `dtype rows cols` header plus raw float32/int32, exact at the bit, ~5 MB total, regenerated from a fixed
@@ -114,7 +114,7 @@ a loaded tensor comes back in that element order with its shape carried; nothing
   test's hard-coded rows) agree for all six types the model uses - for every one of the real file's
   613 tensors, each of which also has to lie inside its shard.
 - **The file's own bytes**: `raw_tensor` returns a window whose FNV-1a hash equals a hash stored from
-  the file by `tools/naive_real_fixture.py`, so C++ compares against the bytes, not against python.
+  the file by `terminal/tools/naive_real_fixture.py`, so C++ compares against the bytes, not against python.
   The same fixture holds the F32 router weight and bias, and `load_tensor_f32` returns them byte-exact
   (ggml carries no fp32 decoder - upstream is the same, fp32 needs none - so the loader copies those).
 - **A synthetic GGUF** written by the test itself: five quantised types plus ragged and unknown-type
@@ -142,7 +142,7 @@ stays on disk. It refuses (naming the tensor) a wrong shape, a type with no deco
 by design), and rows that are not whole blocks - the ROW is checked, not only the tensor total, since
 a {48, 4} Q8_0 tensor is whole blocks while its rows are not.
 
-`tools/naive_real_layer_fixture.py` is the reference. It decodes the same bytes with numpy decoders
+`terminal/tools/naive_real_layer_fixture.py` is the reference. It decodes the same bytes with numpy decoders
 written from the block layout in `ggml-common.h` - the Q6_K element map derived element by element,
 then validated against a literal line-by-line transcription of ggml's decode loop, and the Q8_0
 decoder bit-exact against the layout - so the fixtures do not inherit a ggml misread, and the C++
@@ -183,8 +183,8 @@ while the full stack is 6.4 G elements (12 GiB) and is never touched. `load_tens
 column of a 2-D table - a token's embedding row is column *t* of `token_embd`, 4096 elements out of
 a 2.4 GB tensor.
 
-`tools/naive_real_moe_dsa_fixture.py` is the reference. It decodes the same IQ2 bytes with the
-vectorised numpy transcriptions in `tools/naive_iq2.py`, themselves tested bit-for-bit against a
+`terminal/tools/naive_real_moe_dsa_fixture.py` is the reference. It decodes the same IQ2 bytes with the
+vectorised numpy transcriptions in `terminal/tools/naive_iq2.py`, themselves tested bit-for-bit against a
 literal line-by-line transcription of ggml's decode loops (the IQ2 codebook tables are format data
 shared by construction, not re-typed; the element mapping, the sign tables and the scale nibbles are
 computed differently on the two sides). It reads the experts and the embedding row by one-window byte
@@ -244,7 +244,7 @@ the caches, and `DONE` carries the timings and the stop reason; a request whose 
 `ERR` and leaves the engine idle, never a half-token.
 
 `engine/tests/naive/test_naive_runtime.cpp` (`ctest -R naive_runtime_test`) runs that loop against an
-independent numpy session (`tools/naive_runtime_reference.py` - the vectorised decoders, no shared
+independent numpy session (`terminal/tools/naive_runtime_reference.py` - the vectorised decoders, no shared
 code) over a synthetic GGUF that carries the architecture: 3 layers (DSA + dense, SWA + MoE,
 DSA + MoE), 16 experts top-8, IQ2_XXS/XS expert stacks, Q6_K/Q8_0 attention, BF16 indexer,
 window 8, top_k 2, sinks, the two thetas, 152 576 vocab.  The model (~1 GB) is written into the
@@ -320,23 +320,23 @@ session, and one served chat request answered end to end on the real file.
 ## Files named by this port
 
 - `engine/src/naive/naive_main.cpp`, `engine/include/strata/naive/geometry.hpp`, `engine/include/strata/naive/reader.hpp`
-- `engine/include/strata/naive/kernels.hpp` (the trunk arithmetic), `tools/naive_kernels_oracle.py`,
+- `engine/include/strata/naive/kernels.hpp` (the trunk arithmetic), `terminal/tools/naive_kernels_oracle.py`,
   `engine/tests/naive/test_naive_kernels.cpp`, `engine/tests/naive/fixtures/` (64 arrays)
 - `engine/include/strata/naive/loader.hpp` (mmap window + ggml dequant + `gemv_dequant`),
-  `engine/tests/naive/fixture_io.hpp` (the fixture reader both tests share), `tools/naive_real_fixture.py`
+  `engine/tests/naive/fixture_io.hpp` (the fixture reader both tests share), `terminal/tools/naive_real_fixture.py`
   (real-weight fixtures), `engine/tests/naive/test_naive_loader.cpp` (`ctest -R naive_loader_test`)
-- `tools/naive_real_layer_fixture.py` (the numpy-decoder layer reference),
+- `terminal/tools/naive_real_layer_fixture.py` (the numpy-decoder layer reference),
   `engine/tests/naive/test_naive_layer.cpp` (`ctest -R naive_layer_test`), the 22 `*__*` arrays under
   `engine/tests/naive/fixtures/` (14 MB)
 - `engine/include/strata/naive/trunk.hpp` (the block-fp8 weight round-trip, built and compiled by the trunk
-  test; unused on this file's BF16 indexer), `tools/naive_iq2.py` (the independent IQ2 numpy decoders)
-  and `tools/extract_iq2_tables.py` -> `tools/iq2_tables.py` (the codebook tables parsed from
-  `ggml-common.h`, with count and spot checks), `tools/naive_real_moe_dsa_fixture.py` (the MoE / DSA /
+  test; unused on this file's BF16 indexer), `terminal/tools/naive_iq2.py` (the independent IQ2 numpy decoders)
+  and `terminal/tools/extract_iq2_tables.py` -> `terminal/tools/iq2_tables.py` (the codebook tables parsed from
+  `ggml-common.h`, with count and spot checks), `terminal/tools/naive_real_moe_dsa_fixture.py` (the MoE / DSA /
   trunk reference), `engine/tests/naive/test_naive_moe_dsa.cpp` (`ctest -R naive_moe_dsa_test`), and the
   50 `moe_layer1__` / `dsa_layer0__` / `trunk__` fixture arrays (15 MB in the whole directory)
-- `tools/naive_extract_tokenizer.py`, `tools/strata_tokenizer.py` (the `qwen2` rule), `tools/test_strata_tokenizer.py`
+- `terminal/tools/naive_extract_tokenizer.py`, `tools/strata_tokenizer.py` (the `qwen2` rule), `tools/test_strata_tokenizer.py`
 - `engine/include/strata/naive/runtime.hpp` (the running session: caches, ring, rewind, sampler, serve
-  wiring), `tools/naive_runtime_reference.py` (the independent numpy session, accumulation-order
+  wiring), `terminal/tools/naive_runtime_reference.py` (the independent numpy session, accumulation-order
   mirrored), `engine/tests/naive/test_naive_runtime.cpp` (`ctest -R naive_runtime_test`; it writes the ~1 GB
   synthetic GGUF into the build directory and refuses to compare anything that is not finite)
 - `strata-naive-naive.json`, `run-naive.sh`

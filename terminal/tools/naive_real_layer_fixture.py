@@ -33,9 +33,9 @@
 # rounds (the projections, the activation, the value scale), so the C++ rounds the same way and the
 # two compare like with like.
 #
-#   python tools/naive_real_layer_fixture.py [model-shard-1.gguf] [outdir]
+#   python terminal/tools/naive_real_layer_fixture.py [model-shard-1.gguf] [outdir]
 #     default model:  /home/dmitriy/projects/ai/LLM/models/Naive-N0.5-Flash-MQ87/...00001-of-00004.gguf
-#     default outdir: tests/naive/fixtures
+#     default outdir: engine/tests/naive/fixtures
 
 from __future__ import annotations
 
@@ -394,9 +394,9 @@ def build_swa(m: Model, x_rows: np.ndarray, outdir: str, case: str) -> None:
 
 
 def main() -> None:
-    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    here = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))   # the repo root, two levels above terminal/tools/
     model = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else DEFAULT_MODEL)
-    outdir = sys.argv[2] if len(sys.argv) > 2 else os.path.join(here, "tests", "naive", "fixtures")
+    outdir = sys.argv[2] if len(sys.argv) > 2 else os.path.join(here, "engine", "tests", "naive", "fixtures")
     os.makedirs(outdir, exist_ok=True)
 
     self_test_decoders()

@@ -1,6 +1,6 @@
 // tests/naive/test_naive_layer.cpp - one quantised GEMV (loader.hpp::gemv_dequant) feeding the tested
 // kernels (kernels.hpp) as a REAL layer forward, against fixtures generated straight from the model's
-// weights by tools/naive_real_layer_fixture.py.  This is step 3 of docs/NAIVE.md ("dense layer 0 +
+// weights by terminal/tools/naive_real_layer_fixture.py.  This is step 3 of docs/NAIVE.md ("dense layer 0 +
 // one window layer end to end"), CPU-only, with no weight resident: gemv_dequant decodes one output
 // row at a time through ggml's own `to_float`, so the peak extra memory is one 16 KiB row.
 //
@@ -30,7 +30,7 @@
 // bound moves values by O(100%), not 0.8%.
 //
 //   test_naive_layer [fixtures-dir] [model-any-shard.gguf]
-//     fixtures default: tests/naive/fixtures   (regenerate: python tools/naive_real_layer_fixture.py)
+//     fixtures default: tests/naive/fixtures   (regenerate: python terminal/tools/naive_real_layer_fixture.py)
 //     model default:    /home/dmitriy/projects/ai/LLM/models/Naive-N0.5-Flash-MQ87/
 //                       Naive-N0.5-Flash-MQ87-00001-of-00004.gguf
 //     Model absent -> skip line + exit 77 (CTest's skip code); the synthetic part always runs.
