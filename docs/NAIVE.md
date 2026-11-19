@@ -1,7 +1,7 @@
 # Naive-N0.5-Flash (`naive_n05_flash`): the port's state
 
 This page tracks the engine path for **Naive-N0.5-Flash** models, the `strata-naive` executable
-(`src/naive`, built with `-DSTRATA_BUILD_NAIVE=ON`).  It is a separate binary on purpose: Strata's
+(`engine/src/naive`, built with `-DSTRATA_BUILD_NAIVE=ON`).  It is a separate binary on purpose: Strata's
 `strata` engine compiles its CUDA kernels against ONE shape (`include/strata/core/geometry_checks.hpp`
 static_asserts the Flash-Next geometry), and this architecture shares none of it - like the
 `strata-dsv41` path, a second shape means a second binary.
@@ -49,22 +49,22 @@ So the port is its own binary, and `strata`'s default path stays byte-identical.
 
 | Piece | File | State |
 | --- | --- | --- |
-| Geometry (every metadata key, per-layer lists) | `include/strata/naive/geometry.hpp` | reads the model; cross-key rules in `check_geometry` |
-| Reader + tensor inventory (types, shapes, shard bounds) | `include/strata/naive/reader.hpp` | `--check` passes on MQ87 and its draft |
-| `strata-naive` binary (`--check`, serve INFO/READY, the decode loop) | `src/naive/naive_main.cpp`, `include/strata/naive/runtime.hpp` | builds CPU-only; serves requests (the smoke section below) |
-| CMake target, OFF by default | `CMakeLists.txt` (`STRATA_BUILD_NAIVE`) | does not change any existing target |
+| Geometry (every metadata key, per-layer lists) | `engine/include/strata/naive/geometry.hpp` | reads the model; cross-key rules in `check_geometry` |
+| Reader + tensor inventory (types, shapes, shard bounds) | `engine/include/strata/naive/reader.hpp` | `--check` passes on MQ87 and its draft |
+| `strata-naive` binary (`--check`, serve INFO/READY, the decode loop) | `engine/src/naive/naive_main.cpp`, `engine/include/strata/naive/runtime.hpp` | builds CPU-only; serves requests (the smoke section below) |
+| CMake target, OFF by default | `engine/CMakeLists.txt` (`STRATA_BUILD_NAIVE`) | does not change any existing target |
 | `qwen2` pre-tokenizer (llama.cpp's QWEN2 rule, QWEN35 minus `\p{M}`) | `tools/strata_tokenizer.py` | unit tests pass; encodes/round-trips the model's own vocabulary |
 | Tokenizer folder from the GGUF (vocab, merges, types, chat template) | `tools/naive_extract_tokenizer.py` | wrote the pack folder; the server loads it |
 | Run config and script (port 8081, next to the running 8080 engine) | `strata-naive-naive.json`, `run-naive.sh` | the server starts, lists the model, answers requests (the smoke section below) |
-| Trunk arithmetic (RMSNorm, split-half RoPE, sink attention, FP8 E4M3, index LayerNorm, stable top-k, router, combine, SiLU) | `include/strata/naive/kernels.hpp` | CPU-only header; every function cites its NaiveRT reference |
-| A numpy oracle for that arithmetic + fixtures | `tools/naive_kernels_oracle.py`, `tests/naive/fixtures/` | independent transcription of the same references; 64 fixture arrays |
-| Parity test (this header vs the oracle's fixtures) | `tests/naive/test_naive_kernels.cpp` (`ctest -R naive_kernels_test`) | 18 checks pass: FP8 codes exact, floats within accumulation tolerance |
-| Weight loader (mmap window, ggml's own dequant, F32 copy) | `include/strata/naive/loader.hpp` | CPU-only header; dequant is `ggml_get_type_traits(t).to_float`, not a re-derived codebook |
-| Real-weight fixtures (router, bias, norm, raw bytes - straight from the model file) | `tools/naive_real_fixture.py`, `tests/naive/fixtures/real_*`, `raw_router/`, `dequant_f32/` | reads shard 1 with plain `seek`/`read`; stores the file's own FNV-1a so C++ compares against the bytes, not against python |
-| Loader test (ggml tables, a synthetic GGUF, IQ2 sign property, the real model) | `tests/naive/test_naive_loader.cpp` (`ctest -R naive_loader_test`) | passes with the model (shards, 613-tensor sizes, byte windows, the router over real weights); prints a skip line and exits 77 without it |
-| Quantised GEMV (`gemv_dequant`: ggml's decoder one output row at a time, no resident weight) + `rope_rows` | `include/strata/naive/loader.hpp`, `include/strata/naive/kernels.hpp` | CPU-only header; the row, not the whole weight, must be whole blocks |
-| Real-layer fixtures (layer-0 MLP, window attention, numpy decoders written from the format, never calling ggml) | `tools/naive_real_layer_fixture.py`, `tests/naive/fixtures/layer0_dense__*`, `swa_small__*`, `swa_window__*`, `gemv_probe__*` | 22 arrays (14 MB); the generator self-tests its Q6_K decoder against a literal transcription of ggml's loop and its Q8_0 decoder bit-exact |
-| Layer test (GEMV + norms + RoPE + sink attention + SwiGLU over the real Q8_0/Q6_K weights) | `tests/naive/test_naive_layer.cpp` (`ctest -R naive_layer_test`) | passes with the model in 1.6 s (every tensor within one bf16 ulp of the numpy reference); skip line and exit 77 without it |
+| Trunk arithmetic (RMSNorm, split-half RoPE, sink attention, FP8 E4M3, index LayerNorm, stable top-k, router, combine, SiLU) | `engine/include/strata/naive/kernels.hpp` | CPU-only header; every function cites its NaiveRT reference |
+| A numpy oracle for that arithmetic + fixtures | `tools/naive_kernels_oracle.py`, `engine/tests/naive/fixtures/` | independent transcription of the same references; 64 fixture arrays |
+| Parity test (this header vs the oracle's fixtures) | `engine/tests/naive/test_naive_kernels.cpp` (`ctest -R naive_kernels_test`) | 18 checks pass: FP8 codes exact, floats within accumulation tolerance |
+| Weight loader (mmap window, ggml's own dequant, F32 copy) | `engine/include/strata/naive/loader.hpp` | CPU-only header; dequant is `ggml_get_type_traits(t).to_float`, not a re-derived codebook |
+| Real-weight fixtures (router, bias, norm, raw bytes - straight from the model file) | `tools/naive_real_fixture.py`, `engine/tests/naive/fixtures/real_*`, `raw_router/`, `dequant_f32/` | reads shard 1 with plain `seek`/`read`; stores the file's own FNV-1a so C++ compares against the bytes, not against python |
+| Loader test (ggml tables, a synthetic GGUF, IQ2 sign property, the real model) | `engine/tests/naive/test_naive_loader.cpp` (`ctest -R naive_loader_test`) | passes with the model (shards, 613-tensor sizes, byte windows, the router over real weights); prints a skip line and exits 77 without it |
+| Quantised GEMV (`gemv_dequant`: ggml's decoder one output row at a time, no resident weight) + `rope_rows` | `engine/include/strata/naive/loader.hpp`, `engine/include/strata/naive/kernels.hpp` | CPU-only header; the row, not the whole weight, must be whole blocks |
+| Real-layer fixtures (layer-0 MLP, window attention, numpy decoders written from the format, never calling ggml) | `tools/naive_real_layer_fixture.py`, `engine/tests/naive/fixtures/layer0_dense__*`, `swa_small__*`, `swa_window__*`, `gemv_probe__*` | 22 arrays (14 MB); the generator self-tests its Q6_K decoder against a literal transcription of ggml's loop and its Q8_0 decoder bit-exact |
+| Layer test (GEMV + norms + RoPE + sink attention + SwiGLU over the real Q8_0/Q6_K weights) | `engine/tests/naive/test_naive_layer.cpp` (`ctest -R naive_layer_test`) | passes with the model in 1.6 s (every tensor within one bf16 ulp of the numpy reference); skip line and exit 77 without it |
 
 `--check` needs no GPU and loads no weights:
 
@@ -75,7 +75,7 @@ engine-cuda12/strata-naive --native <shard1.gguf> --draft <dspark.gguf> --check
 
 ## The arithmetic core is built and tested without the model
 
-The forward's numbers live in `include/strata/naive/kernels.hpp`, one function per piece, each a direct
+The forward's numbers live in `engine/include/strata/naive/kernels.hpp`, one function per piece, each a direct
 transcription of a named reference in the model authors' runtime (NaiveRT): RMSNorm; split-half RoPE on
 the first 64 dims (theta 1e7 on the DSA layers, 1e4 on the window layers, the rest copied); softmax
 attention at scale 1/sqrt(192) with a per-head sink logit added to the denominator (window layers) or
@@ -86,9 +86,9 @@ renormalised weights; the weighted expert combine; and the SwiGLU activation.
 Because NaiveRT's kernels target Blackwell and torch is absent here, the check is a **numpy oracle**
 (`tools/naive_kernels_oracle.py`) - the same references, transcribed by hand into numpy with different
 algorithms where they can differ (a table search for FP8 where the C++ splits with `frexp`, pairwise
-reductions where the C++ sums in double). It writes binary fixtures (`tests/naive/fixtures/`: an ASCII
+reductions where the C++ sums in double). It writes binary fixtures (`engine/tests/naive/fixtures/`: an ASCII
 `dtype rows cols` header plus raw float32/int32, exact at the bit, ~5 MB total, regenerated from a fixed
-seed; `--print CASE` shows any case as text) that `tests/naive/test_naive_kernels.cpp` reads and checks
+seed; `--print CASE` shows any case as text) that `engine/tests/naive/test_naive_kernels.cpp` reads and checks
 the header against: integers (expert ids, FP8 codes, top-k indices with their tie rule) must match
 bit-for-bit, floats within a tolerance that admits the fp32-vs-double spread but no formula bug.
 `ctest -R naive_kernels_test` runs it anywhere - no GPU, no model, no torch.
@@ -101,14 +101,14 @@ full forward runs until the layer wiring below lands.
 
 ## The weight loader is built and tested (real model included)
 
-`include/strata/naive/loader.hpp` reads weights out of the shards on top of the reader. The model is
+`engine/include/strata/naive/loader.hpp` reads weights out of the shards on top of the reader. The model is
 81 GiB and this machine keeps a running engine resident beside it, so the loader never slurps a file:
 it hands back a pointer to a tensor's bytes in the mmap (no copy) and dequantises into fp32 on demand.
 The dequant is ggml's own per-type converter (`ggml_get_type_traits(t).to_float`) - the same reference
 the model authors' runtime loads through - not a re-derived IQ2 codebook. GGUF stores dim 0 fastest, so
 a loaded tensor comes back in that element order with its shape carried; nothing silently transposes it.
 
-`tests/naive/test_naive_loader.cpp` (`ctest -R naive_loader_test`) checks the port's own layer, four ways:
+`engine/tests/naive/test_naive_loader.cpp` (`ctest -R naive_loader_test`) checks the port's own layer, four ways:
 
 - **Byte counts**: three independent tables (ggml's size functions, the reader's block geometry, the
   test's hard-coded rows) agree for all six types the model uses - for every one of the real file's
@@ -151,7 +151,7 @@ projections, the activation, the value scale), per `run_attn_swa.py`; the value 
 after the projection as bf16, the reference's weight-folding differs by at most one bf16 ulp, and both
 sides here take the same post-projection choice.
 
-`tests/naive/test_naive_layer.cpp` (`ctest -R naive_layer_test`) runs the port's GEMV plus the tested
+`engine/tests/naive/test_naive_layer.cpp` (`ctest -R naive_layer_test`) runs the port's GEMV plus the tested
 kernels and compares against those fixtures, on real weights:
 
 - the layer-0 MLP: RMSNorm -> gate/up -> `silu(gate) * up` -> down (five Q8_0 tensors, 6 arrays);
@@ -197,10 +197,10 @@ renormalised by `sum + 1e-20`), and the DSA chain keeps `run_attn_dsa.py`'s four
 indexer key (bf16 -> LayerNorm -> bf16 -> rope -> bf16) before the E4M3 row quant. One deviation is
 recorded rather than hidden: the reference quantises its *indexer weights* to fp8 from its own
 checkpoint, while this GGUF ships them as BF16, so both sides read bf16 here -
-`include/strata/naive/trunk.hpp` carries the block-fp8 round-trip (`packing.py:quantize_fp8_block`)
+`engine/include/strata/naive/trunk.hpp` carries the block-fp8 round-trip (`packing.py:quantize_fp8_block`)
 for a checkpoint that ships it, built and compiled by the test, unused on this file.
 
-`tests/naive/test_naive_moe_dsa.cpp` (`ctest -R naive_moe_dsa_test`, cases `moe | dsa | trunk`) runs
+`engine/tests/naive/test_naive_moe_dsa.cpp` (`ctest -R naive_moe_dsa_test`, cases `moe | dsa | trunk`) runs
 the port against those fixtures on real weights:
 
 - **moe** - the layer-1 FFN for one token: the training rmsnorm over the real F32 gamma, the router
@@ -230,7 +230,7 @@ builds exactly those.  The numbers above pin the forward of a two-layer slice ov
 ## The whole loop runs, tested against an independent numpy session
 
 The pieces above are per-layer slices.  What joins them into a running session is
-`include/strata/naive/runtime.hpp`: the row-by-row forward over all layers (K cached after rope, V
+`engine/include/strata/naive/runtime.hpp`: the row-by-row forward over all layers (K cached after rope, V
 after the value fold, one bf16 round into the cache; the DSA layers also cache the index key
 dequantised from its E4M3 code), the full-history DSA cache and the window ring (capacity
 window + max(chunk, session history), so a rewind inside the ring never re-reads the prompt), the
@@ -238,12 +238,12 @@ selection rule (at or below `index_top_k` visible rows every row wins - the iden
 runtime publishes without computing the index query; above it the runtime computes the E4M3 index
 logits and the stable top-k), the router over the layer's own expert slice, the sampler (greedy,
 temperature, top-k, min-p, top-p, reseeded per request), and `rewind` to the common prefix a served
-multi-turn request needs.  `src/naive/naive_main.cpp` wires it into the serve protocol: the prompt's
+multi-turn request needs.  `engine/src/naive/naive_main.cpp` wires it into the serve protocol: the prompt's
 rows prefill (PP every 16 rows), the last row's logits sample the first token, decode continues from
 the caches, and `DONE` carries the timings and the stop reason; a request whose forward fails answers
 `ERR` and leaves the engine idle, never a half-token.
 
-`tests/naive/test_naive_runtime.cpp` (`ctest -R naive_runtime_test`) runs that loop against an
+`engine/tests/naive/test_naive_runtime.cpp` (`ctest -R naive_runtime_test`) runs that loop against an
 independent numpy session (`tools/naive_runtime_reference.py` - the vectorised decoders, no shared
 code) over a synthetic GGUF that carries the architecture: 3 layers (DSA + dense, SWA + MoE,
 DSA + MoE), 16 experts top-8, IQ2_XXS/XS expert stacks, Q6_K/Q8_0 attention, BF16 indexer,
@@ -319,25 +319,25 @@ session, and one served chat request answered end to end on the real file.
 
 ## Files named by this port
 
-- `src/naive/naive_main.cpp`, `include/strata/naive/geometry.hpp`, `include/strata/naive/reader.hpp`
-- `include/strata/naive/kernels.hpp` (the trunk arithmetic), `tools/naive_kernels_oracle.py`,
-  `tests/naive/test_naive_kernels.cpp`, `tests/naive/fixtures/` (64 arrays)
-- `include/strata/naive/loader.hpp` (mmap window + ggml dequant + `gemv_dequant`),
-  `tests/naive/fixture_io.hpp` (the fixture reader both tests share), `tools/naive_real_fixture.py`
-  (real-weight fixtures), `tests/naive/test_naive_loader.cpp` (`ctest -R naive_loader_test`)
+- `engine/src/naive/naive_main.cpp`, `engine/include/strata/naive/geometry.hpp`, `engine/include/strata/naive/reader.hpp`
+- `engine/include/strata/naive/kernels.hpp` (the trunk arithmetic), `tools/naive_kernels_oracle.py`,
+  `engine/tests/naive/test_naive_kernels.cpp`, `engine/tests/naive/fixtures/` (64 arrays)
+- `engine/include/strata/naive/loader.hpp` (mmap window + ggml dequant + `gemv_dequant`),
+  `engine/tests/naive/fixture_io.hpp` (the fixture reader both tests share), `tools/naive_real_fixture.py`
+  (real-weight fixtures), `engine/tests/naive/test_naive_loader.cpp` (`ctest -R naive_loader_test`)
 - `tools/naive_real_layer_fixture.py` (the numpy-decoder layer reference),
-  `tests/naive/test_naive_layer.cpp` (`ctest -R naive_layer_test`), the 22 `*__*` arrays under
-  `tests/naive/fixtures/` (14 MB)
-- `include/strata/naive/trunk.hpp` (the block-fp8 weight round-trip, built and compiled by the trunk
+  `engine/tests/naive/test_naive_layer.cpp` (`ctest -R naive_layer_test`), the 22 `*__*` arrays under
+  `engine/tests/naive/fixtures/` (14 MB)
+- `engine/include/strata/naive/trunk.hpp` (the block-fp8 weight round-trip, built and compiled by the trunk
   test; unused on this file's BF16 indexer), `tools/naive_iq2.py` (the independent IQ2 numpy decoders)
   and `tools/extract_iq2_tables.py` -> `tools/iq2_tables.py` (the codebook tables parsed from
   `ggml-common.h`, with count and spot checks), `tools/naive_real_moe_dsa_fixture.py` (the MoE / DSA /
-  trunk reference), `tests/naive/test_naive_moe_dsa.cpp` (`ctest -R naive_moe_dsa_test`), and the
+  trunk reference), `engine/tests/naive/test_naive_moe_dsa.cpp` (`ctest -R naive_moe_dsa_test`), and the
   50 `moe_layer1__` / `dsa_layer0__` / `trunk__` fixture arrays (15 MB in the whole directory)
 - `tools/naive_extract_tokenizer.py`, `tools/strata_tokenizer.py` (the `qwen2` rule), `tools/test_strata_tokenizer.py`
-- `include/strata/naive/runtime.hpp` (the running session: caches, ring, rewind, sampler, serve
+- `engine/include/strata/naive/runtime.hpp` (the running session: caches, ring, rewind, sampler, serve
   wiring), `tools/naive_runtime_reference.py` (the independent numpy session, accumulation-order
-  mirrored), `tests/naive/test_naive_runtime.cpp` (`ctest -R naive_runtime_test`; it writes the ~1 GB
+  mirrored), `engine/tests/naive/test_naive_runtime.cpp` (`ctest -R naive_runtime_test`; it writes the ~1 GB
   synthetic GGUF into the build directory and refuses to compare anything that is not finite)
 - `strata-naive-naive.json`, `run-naive.sh`
 - `Strata-data/packs/naive-n05-flash/tokenizer/` (five files extracted from the model's GGUF)
