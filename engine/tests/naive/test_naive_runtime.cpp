@@ -608,10 +608,17 @@ int main(int argc, char** argv) {
     std::error_code ec;
     std::filesystem::create_directories(scratch, ec);
     // The repo root, found from the fixtures dir CTest passes (…/tests/naive/fixtures) or from the
+<<<<<<< HEAD
     // cwd: the first parent that holds terminal/tools/naive_runtime_reference.py, the numpy reference below.
     std::filesystem::path root = argc > 1 ? std::filesystem::path(argv[1]) : "tests/naive/fixtures";
     root = std::filesystem::weakly_canonical(root.parent_path().parent_path().parent_path(), ec);
     for (int up = 0; up < 5 && !std::filesystem::exists(root / "terminal/tools/naive_runtime_reference.py"); ++up)
+=======
+    // cwd: the first parent that holds tools/naive_runtime_reference.py, the numpy reference below.
+    std::filesystem::path root = argc > 1 ? std::filesystem::path(argv[1]) : "tests/naive/fixtures";
+    root = std::filesystem::weakly_canonical(root.parent_path().parent_path().parent_path(), ec);
+    for (int up = 0; up < 5 && !std::filesystem::exists(root / "tools/naive_runtime_reference.py"); ++up)
+>>>>>>> 26e9c713c7a23f885f059ef0d990daf59fbb3d84
         root = root.parent_path();
     const std::string only = argc > 3 ? argv[3] : "all";
 

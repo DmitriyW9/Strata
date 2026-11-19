@@ -2,6 +2,7 @@
 
 This page tracks the engine path for **Naive-N0.5-Flash** models, the `strata-naive` executable
 (`engine/src/naive`, built with `-DSTRATA_BUILD_NAIVE=ON`).  It is a separate binary on purpose: Strata's
+(`engine/src/naive`, built with `-DSTRATA_BUILD_NAIVE=ON`).  It is a separate binary on purpose: Strata's
 `strata` engine compiles its CUDA kernels against ONE shape (`include/strata/core/geometry_checks.hpp`
 static_asserts the Flash-Next geometry), and this architecture shares none of it - like the
 `strata-dsv41` path, a second shape means a second binary.
@@ -49,6 +50,10 @@ So the port is its own binary, and `strata`'s default path stays byte-identical.
 
 | Piece | File | State |
 | --- | --- | --- |
+| Geometry (every metadata key, per-layer lists) | `engine/include/strata/naive/geometry.hpp` | reads the model; cross-key rules in `check_geometry` |
+| Reader + tensor inventory (types, shapes, shard bounds) | `engine/include/strata/naive/reader.hpp` | `--check` passes on MQ87 and its draft |
+| `strata-naive` binary (`--check`, serve INFO/READY, the decode loop) | `engine/src/naive/naive_main.cpp`, `engine/include/strata/naive/runtime.hpp` | builds CPU-only; serves requests (the smoke section below) |
+| CMake target, OFF by default | `engine/CMakeLists.txt` (`STRATA_BUILD_NAIVE`) | does not change any existing target |
 | Geometry (every metadata key, per-layer lists) | `engine/include/strata/naive/geometry.hpp` | reads the model; cross-key rules in `check_geometry` |
 | Reader + tensor inventory (types, shapes, shard bounds) | `engine/include/strata/naive/reader.hpp` | `--check` passes on MQ87 and its draft |
 | `strata-naive` binary (`--check`, serve INFO/READY, the decode loop) | `engine/src/naive/naive_main.cpp`, `engine/include/strata/naive/runtime.hpp` | builds CPU-only; serves requests (the smoke section below) |
