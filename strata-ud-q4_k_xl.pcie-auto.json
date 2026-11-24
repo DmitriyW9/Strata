@@ -29,7 +29,13 @@
   "--vram-reserve-later-mib",
   "2048",
   "--ple-io",
-  "direct"
+  "direct",
+  "--adapt-every",
+  "4",
+  "--adapt-swaps",
+  "96",
+  "--adapt-decay",
+  "0.7"
  ],
  "cwd": "/home/dmitriy/projects/ai/LLM/Strata",
  "tokenizer": "/home/dmitriy/projects/ai/LLM/Strata-data/packs/ud-q4_k_xl/tokenizer",
