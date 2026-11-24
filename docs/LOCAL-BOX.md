@@ -167,6 +167,13 @@ themselves — here both cards are full while a model is served. One knob per ar
 `expert cache N slots`, `MiB of VRAM free with everything loaded`, `PCIe share:`, `decode expert cache hit rate`,
 `KV streaming`. In the order of expected size:
 
+Before any A/B: the first start on the 0.1.66 engine is itself an arm. Read it against the 0.1.61 baseline in this
+file — `version 0.1.66` in the start line; the `layer split` line with its K and slot counts (0.1.61 said `K=44`,
+`NEAR TIE with K=41`, 8 822 and 1 847 slots); **no** `#4870 mid-coverage expert cache` line, because the config now
+names the curve it pins; a `route tail skip` line, which is the proof that `STRATA_ROUTE_TAIL_SKIP=7` reached the
+engine; and any line about `STRATA_L3_PF` or the low-VRAM rules, which 0.1.64 added and which no one has seen on this
+box yet.
+
 1. the #4870 curve the config now pins away: drop the three `--adapt-*` args (the engine then prints `#4870
    mid-coverage expert cache (…): every 4 -> 2, swaps 96 -> 192, decay 0.70 -> 0.92`) against keeping them — decode
    tok/s, `decode expert cache hit rate`, and RSS plus swap over an hour, since a doubled exchange is exactly what
@@ -190,21 +197,48 @@ themselves — here both cards are full while a model is served. One knob per ar
 
 ## What is deployed in `engine-cuda12/` right now
 
-- `strata-naive` — **0.1.66**, rebuilt here on 2026-11-23 from the merged tree with `-DSTRATA_ENABLE_CUDA=OFF
-  -DSTRATA_BUILD_NAIVE=ON -DSTRATA_EXPERIMENTAL_SM60=ON`; the build it replaced is kept beside it as
-  `strata-naive.old-0.1.63.pre-0.1.66` (and the older ones further back). Nothing was listening on 8081 when it was
-  replaced.
-- `strata` and `strata-vision` — still **0.1.61** (built 2026-11-17), and the model served on 8080 is served **from
-  this checkout** (`/home/dmitriy/projects/ai/LLM/Strata/engine-cuda12/strata`, started 2026-11-23 18:18), so these two
-  are not rebuilt, relinked or renamed while it runs. The tree is 0.1.66, which means everything in the two sections
-  above lands only at the next rebuild: `tools/packaging/build_split_cuda.sh` (it passes `STRATA_SPLIT_ARCH2=89`
-  beside `70` and `-DCMAKE_CUDA_COMPILER=/usr/local/cuda-12.9/bin/nvcc`), a build directory first, and the deployed
-  file renamed aside (`strata.old-<old>.pre-<new>`) before the new one goes in.
-- What was compiled on 2026-11-23 to prove the merge is sound: the Naive engine and its tests (CPU, `-j2`, and its
-  `--check` on the real shards), and `s2_qpn8.cu`, `dequant_bf16.cu`, `layer.cpp`, `expert_cache.cpp`,
-  `native_dense.cpp`, `state_codec.cpp`, `prefill.cpp`, `generate.cpp` for `70;89`, plus `kv_host_dma_test` and
-  `split_rules_test` — all with `-j1` and a memory cap, because the served model owns the rest. **No link of `strata`
-  and no run of the merged CUDA engine**, same reason as before.
+Built and installed here on 2026-11-24 from the merged tree; the model served on 8080 was **not** stopped and is not
+affected — it still runs the 0.1.61 inode it started with (`engine started: … engine-cuda12/strata`, 2026-11-23
+18:18). Everything below lands at the next start of the model.
+
+- `strata` — **0.1.66**, 190.6 MB. The old one is kept as `strata.old-0.1.61.pre-0.1.66` (284 MB: 0.1.66 is smaller
+  because upstream removed the vendored `ggml-cuda`/MMQ build path, `3e26b4e15`). The fork's own switches are in the
+  binary — `STRATA_ARENA_THREADS`, `STRATA_DP_PREFILL`, `STRATA_KV_HOST_DMA`, `STRATA_QPN8` each appear once in it.
+- `strata-vision` — **0.1.66**, 1 MB against the old 103 MB, and that is the point: since 0.2.16 the picture reader
+  is its own tower on cuBLAS rather than llama.cpp's `mtmd`, so the binary no longer drags a CUDA stack along. It
+  links `libcublas`, `libcublasLt` and `libcudart`, like the file it replaced. Old one:
+  `strata-vision.old-0.1.61.pre-0.1.66`.
+- `strata-naive` — **0.1.66** (see the Naive section), `strata-naive.old-0.1.63.pre-0.1.66` kept.
+- `libstrata_kq.so` — **moved aside** as `libstrata_kq.so.old-0.1.61.pre-0.1.66`. Nothing in 0.1.66 loads it: the
+  loader `src/prefill/mmq_kq_loader.cpp` and the library's build rule went away with `3e26b4e15`, and `ldd` on the
+  old 0.1.61 binary already showed no `NEEDED` entry — the file had been dead weight since 0.1.62.
+- `BUILD.json` — refreshed the way `terminal/setup.py` writes it: `version 0.1.66`, `archs [70, 89]`, `vision "gpu"`,
+  `toolkit 12`, and `src` / `vision_src` recomputed with setup's own `source_hash` (`d76445cd2c987e00` /
+  `8e7b24e25e42d555`), so a later `--update` sees the engine as matching this tree.
+
+**How this deploy was built, since the old build folders are dead ends.** `build-cuda12` and `build-vision-cuda12`
+were configured before 0.2.16 moved the engine sources into `engine/`; their `CMAKE_HOME_DIRECTORY` is the repo root,
+which has no `CMakeLists.txt` any more, so `ninja` in them only tries (and fails) to re-run CMake. The fresh
+configuration, which is the same toolchain the 0.1.61 files were built with:
+
+```sh
+cmake -G Ninja -S engine -B build-0220-deploy -DCMAKE_BUILD_TYPE=Release -DSTRATA_ENABLE_CUDA=ON \
+  -DCMAKE_CUDA_COMPILER=/usr/local/cuda-12.9/bin/nvcc -DCMAKE_CUDA_ARCHITECTURES="70;89" \
+  -DCMAKE_CUDA_HOST_COMPILER=/usr/bin/g++-14 -DCMAKE_CXX_COMPILER=/usr/bin/c++ \
+  "-DCMAKE_CUDA_FLAGS=-Xcompiler=-include,/home/dmitriy/projects/ai/LLM/Strata/tools/cuda_glibc_compat.h" \
+  -DSTRATA_EXPERIMENTAL_SM60=ON -DSTRATA_BUILD_TESTS=OFF -DSTRATA_BUILD_NAIVE=OFF -DSTRATA_BUILD_SPLIT=OFF
+cmake -G Ninja -S terminal/tools/vision -B build-0220-vision -DCMAKE_BUILD_TYPE=Release \
+  -DSTRATA_VISION_CUDA=ON -DCMAKE_CUDA_COMPILER=/usr/local/cuda-12.9/bin/nvcc \
+  -DCMAKE_CUDA_ARCHITECTURES="70;89" -DCMAKE_CUDA_HOST_COMPILER=/usr/bin/g++-14 \
+  "-DCMAKE_CUDA_FLAGS=-Xcompiler=-include,/home/dmitriy/projects/ai/LLM/Strata/tools/cuda_glibc_compat.h"
+```
+
+Three things in it are not optional on this box: the `cuda_glibc_compat.h` include (without it nvcc 12.9 stops on
+`cospi` in `bits/mathcontrols.h`), `g++-14` as the CUDA host compiler (the system g++ is newer than nvcc 12.9 takes),
+and `STRATA_EXPERIMENTAL_SM60=ON` — `cmake/backends/cuda.cmake:54` refuses `70;89` without it, saying plainly that a
+Volta build is unsupported upstream. The build ran `-j1` under `ulimit -v 9000000` with `nice -n 19 ionice -c3`,
+because the served model leaves about 2 GiB of RAM and 146 edges had to go one at a time; 146 edges took about 50
+minutes and the served model answered throughout.
 
 ## Two hazards on this checkout
 
