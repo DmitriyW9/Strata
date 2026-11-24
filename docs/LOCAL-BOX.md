@@ -216,14 +216,17 @@ this tree the function has exactly one caller, `setup.main()` at `terminal/setup
 lands there (`/terminal/strata-*.json`, `/terminal/run-*.sh`), so `git status` only says the root copies were deleted.
 It happened three times on this fork: in this folder on 2026-11-19, in a throwaway `git worktree` on 2026-11-21, and
 again on 2026-11-23 in a fresh worktree of the merged tree — each time during a plain `python -m pytest` over
-`terminal/serve` and `terminal/tests/terminal`. What the 2026-11-21 note blamed was wrong: `setup.update_install`,
-which `terminal/tests/terminal/test_fixapp_0217_update_build.py` and `test_update_launch_rules.py` call, does not
-reach the move (12 tests, run on 2026-11-23 in a clean worktree, left all five root configs where they are), and
-nothing else in `setup.py` renames a root file. Which test inside that run hands the checkout to `setup.main()` is
-being pinned down with a plugin that stops the run the moment a root config disappears. Until then the rule is the
-one that works: **run that suite from a separate clone or a worktree, never from this root** — and since 2026-11-23
-this is not only about tidiness, because the served model runs from `engine-cuda12/strata` in this very folder, and a
-move would leave its binary and its configs somewhere else for the next restart.
+`terminal/serve` and `terminal/tests/terminal`. The 2026-11-23 run was stopped with a plugin that ends the run the
+moment a root config disappears, and it named the test: **`terminal/tests/terminal/test_intel_app_install.py`,
+`SetupControlMode::test_the_dispatch_in_main_is_by_mode` (`:246-252`)** calls `setup.main()` (line 251) to check which
+mode dispatches where, mocking only `setup.CONTROL`, the two setup functions and `sys.argv`. `main()` opens with the
+layout pass (`terminal/setup.py:11418`), the guard lets it through in a checkout of this layout, and the move happens
+before the mocked Intel code the test is actually about. The 2026-11-21 note blamed `setup.update_install` instead;
+that was wrong — its two test files run green and leave all five root configs where they are, and nothing else in
+`setup.py` renames a root file. The test file is byte-identical at 0.1.63, so it has been the mover all along. The
+rule stays: **run that suite from a separate clone or a worktree, never from this root** — and since 2026-11-23 this
+is not only about tidiness, because the served model runs from `engine-cuda12/strata` in this very folder, and a move
+would leave its binary and its configs somewhere else for the next restart.
 
 **Nine tests fail here for the box's own reasons, and none of them came from a merge** (all nine were re-run in
 worktrees of `strata/main` and of `pre-merge-2026-11-23` on 2026-11-23 and fail identically at both refs):
