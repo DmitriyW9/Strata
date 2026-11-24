@@ -329,8 +329,24 @@ was seen once, in the model's own log.
    unconfirmed — the same start left it 756 MiB free *with* four layers offloaded.
 4. `--peer-device` in `args`, which the same helper honours by not adding the split: the second card becomes an
    expert-cache tier. Untested here, and the peer tier reads its rows over P2P, which this pair may not have.
+5. **Take the two sm_70 pins out of `env`** — the cheapest arm of all, no rebuild. `STRATA_SM70_TABLE=1` is this fork's
+   own forcing of the Volta table on a box whose mixed compute capability made upstream skip it, and that table is 21
+   switches, among them `STRATA_GDN_SPLIT=1`. Upstream then found that exact switch poisonous: `e6c2d002e` (0.1.67,
+   #6747) says the sm_70 table's `STRATA_GDN_SPLIT=1` *"holds kVerifyMaxT (8) rows per thread and has no batched
+   commit"*, so a window wider than that *"ended the engine (`invalid arguments`, HTTP 503, restart loop under a
+   supervisor)"* — and 0.1.67 now drops the table's switch by itself, keeping a user's own `STRATA_GDN_SPLIT=1` only
+   with a clamped window and a warning. That guard fires on `--lookup-max-t` only, and a layer split has no lookup
+   window (`lookup_default.hpp:23-28` returns 0 with a split), so **0.1.67 does not cover our faulted run** — but it
+   shows the class: a switch from the table we force on, meeting a verify window the kernel cannot run. Our faulted
+   run's window was *"up to 8 tokens"*, which is `kVerifyMaxT` itself. A lead from reading `e6c2d002e` and the log, and
+   the arm is one edit in `env`: drop `STRATA_SM70_TABLE` and `STRATA_ARGMAX_ROWS_SM70` and start again.
 
-**The bisection, for when the cards are free.** The tags carry the engine versions: `v0.2.17` is 0.1.63, `v0.2.18`
+**The bisection, for when the cards are free.** Written before the tree moved on: `93883c376` merged v0.2.21 (engine
+0.1.67), which carries `e6c2d002e`, so the order of work changed — arm 5 first (a config edit, no build), then a rebuild
+at the current tree, and the bisection only if both still fault. It is still written down because it is the only thing
+that names a commit.
+
+The tags carry the engine versions: `v0.2.17` is 0.1.63, `v0.2.18`
 0.1.64, `v0.2.19` 0.1.65, `v0.2.20` 0.1.66; the control is the kept 0.1.61 binary and the failure is the deployed
 0.1.66, so three builds between them bracket it. One build is a worktree, the configure block above, `ninja -j1 strata`
 under `ulimit -v` and `nice`/`ionice` (about 50 minutes while another model is served), and the candidate goes to a
