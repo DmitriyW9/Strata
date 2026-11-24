@@ -37,6 +37,12 @@
   "--adapt-decay",
   "0.7"
  ],
+ "user_args": [
+  "--spec",
+  "6",
+  "--suffix-draft",
+  "0"
+ ],
  "cwd": "/home/dmitriy/projects/ai/LLM/Strata",
  "tokenizer": "/home/dmitriy/projects/ai/LLM/Strata-data/packs/ud-q4_k_xl/tokenizer",
  "model_name": "qwen3.8-flash-next-ud-q4_k_xl",

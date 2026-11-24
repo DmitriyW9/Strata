@@ -298,8 +298,29 @@ was seen once, in the model's own log.
    to `strata-ud-q4_k_xl.nodraft.log`). Checked in code, not on a GPU: `drafting.apply` strips the draft flags for
    `off` ([terminal/strata_control/drafting.py:1716-1719](../terminal/strata_control/drafting.py#L1716-L1719)) and the
    engine's `o.draft` is set only by `--draft` ([engine/src/program/generate.cpp:4200](../engine/src/program/generate.cpp#L4200)),
-   so with no flag the engine starts no drafter and builds no verify window. What the missing drafter costs in decode
-   speed is unmeasured; the served config runs DFlash2 at `--spec 6`.
+   so with no flag the engine starts no model drafter. What the missing drafter costs in decode speed is unmeasured;
+   the served config runs DFlash2 at `--spec 6`.
+
+   **Two things that made the first version of this arm refuse to start**, both found in its own log on 2026-11-24:
+
+   - A native (IQ) pack cannot run without a spec window: the engine stops at once with *"is a native (IQ) pack: it
+     needs `--native SHARD1`, `--spec T (T >= 2)` and `--prefill CHUNK`"*
+     ([engine/src/program/generate.cpp:5816-5818](../engine/src/program/generate.cpp#L5816-L5818)), and `"drafting": "off"`
+     passes no `--spec` at all — `DRAFT_FLAGS`
+     ([terminal/strata_control/drafting.py:1633](../terminal/strata_control/drafting.py#L1633)) does not list it, and the
+     `off` branch adds nothing. So the arm carries `"user_args": ["--spec", "6", "--suffix-draft", "0"]`, the place the
+     Terminal keeps a person's own options in (`strata_control/user_args.py`, whose own docstring names `--spec` as the
+     example). `--spec` is not one of the draft flags, so it survives the strip; checked by running `user_args.capture`
+     → `merge` → `drafting.apply` on the file: the drafter comes out `off`, `--draft` absent, `--spec 6` present.
+     Worth a line upstream: **`"drafting": "off"` cannot start a model whose pack is native (IQ)** — the choice is
+     refused by the engine, not by the Terminal.
+   - `--spec 6` alone would not have made a drafter-free run: `suffix_draft` **defaults to 3**
+     ([engine/src/program/generate.cpp:1198](../engine/src/program/generate.cpp#L1198)), so with a spec window and no
+     model drafter the engine drafts from the suffix tree and still builds verify windows — the arm would have proved
+     nothing. `--suffix-draft 0` turns that off, and the lookup drafter is off on its own here:
+     [engine/include/strata/core/lookup_default.hpp:23-28](../engine/include/strata/core/lookup_default.hpp#L23-L28)
+     returns 12 only when there is no layer split and `suffix_draft` is on. Static reading; whether the fault follows
+     the verify window or the drafter is exactly what this arm is meant to tell apart.
 3. One card: `"gpu": [1]`. `layer_split_of()`
    [terminal/serve/server_parts/engines.py:783-786](../terminal/serve/server_parts/engines.py#L783-L786) adds
    `--layer-split auto` only when a config names more than one card, so with one card the engine prints "one GPU
