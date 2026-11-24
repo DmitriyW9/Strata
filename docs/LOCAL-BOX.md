@@ -292,9 +292,14 @@ was seen once, in the model's own log.
 1. Put back `engine-cuda12/strata.old-0.1.61.pre-0.1.66` — the build that served this model the day before. Rename the
    live file aside, copy that one in, put `version` and `src` back in `BUILD.json`. This is also the control arm for
    the report upstream.
-2. `"drafting": "off"` in the config: [terminal/strata_control/drafting.py:37](../terminal/strata_control/drafting.py#L37)
-   accepts `auto | mtp | dflash2 | off`. No verify window is ever built, so the faulting kernel cannot run. What it
-   costs in decode speed is unmeasured.
+2. `"drafting": "off"` — **prepared**: [strata-ud-q4_k_xl.nodraft.json](../strata-ud-q4_k_xl.nodraft.json) and
+   [run-ud-q4_k_xl.nodraft.sh](../run-ud-q4_k_xl.nodraft.sh), a copy of the served config whose only engine-facing
+   difference is that key (`args`, `env` and `gpu` are byte-identical; it listens on 8092, on localhost only, and logs
+   to `strata-ud-q4_k_xl.nodraft.log`). Checked in code, not on a GPU: `drafting.apply` strips the draft flags for
+   `off` ([terminal/strata_control/drafting.py:1716-1719](../terminal/strata_control/drafting.py#L1716-L1719)) and the
+   engine's `o.draft` is set only by `--draft` ([engine/src/program/generate.cpp:4200](../engine/src/program/generate.cpp#L4200)),
+   so with no flag the engine starts no drafter and builds no verify window. What the missing drafter costs in decode
+   speed is unmeasured; the served config runs DFlash2 at `--spec 6`.
 3. One card: `"gpu": [1]`. `layer_split_of()`
    [terminal/serve/server_parts/engines.py:783-786](../terminal/serve/server_parts/engines.py#L783-L786) adds
    `--layer-split auto` only when a config names more than one card, so with one card the engine prints "one GPU
@@ -303,6 +308,19 @@ was seen once, in the model's own log.
    unconfirmed — the same start left it 756 MiB free *with* four layers offloaded.
 4. `--peer-device` in `args`, which the same helper honours by not adding the split: the second card becomes an
    expert-cache tier. Untested here, and the peer tier reads its rows over P2P, which this pair may not have.
+
+**The bisection, for when the cards are free.** The tags carry the engine versions: `v0.2.17` is 0.1.63, `v0.2.18`
+0.1.64, `v0.2.19` 0.1.65, `v0.2.20` 0.1.66; the control is the kept 0.1.61 binary and the failure is the deployed
+0.1.66, so three builds between them bracket it. One build is a worktree, the configure block above, `ninja -j1 strata`
+under `ulimit -v` and `nice`/`ionice` (about 50 minutes while another model is served), and the candidate goes to a
+path of its own — never over the deployed file. The fault shows itself in the **first** verify window after the
+capture, so one 8-token prompt against the candidate is enough to tell fault from no-fault, and the arm to test with
+is the served config, not the drafting-off one. `git log --oneline v0.2.17..v0.2.20 -- engine/src/core/verify.cpp
+engine/src/core/dflash2.cpp engine/src/kernels/cuda/verify_kernels.cu engine/src/kernels/cuda/dflash2.cu` lists 12
+commits to read while the build runs. The first to read is `53f59c064`: its own message says it extends the tiny-cache
+(`< 25 %` resident) swap dampening and Zipf-head pinning **to multi-GPU layer splits**, and two of its lines are
+visible in this very log (`--prefill auto stays at 8192 … (#5199)` and the 7424-token chunk that CUDA1's 1627 slots
+forced). A lead from its commit message and the log, nothing more — it is not a finding until a build says so.
 
 ## Two hazards on this checkout
 
