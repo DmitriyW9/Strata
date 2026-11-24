@@ -240,6 +240,70 @@ Volta build is unsupported upstream. The build ran `-j1` under `ulimit -v 900000
 because the served model leaves about 2 GiB of RAM and 146 edges had to go one at a time; 146 edges took about 50
 minutes and the served model answered throughout.
 
+## 2026-11-24: the first start on 0.1.66 faulted in the verify window
+
+The model started on the new engine at 11:32 and its log stops at 11:48 on two lines:
+
+```
+strata serve: verify: layer 44 never rang (operation not supported on global/shared address space)
+[strata] 2026-11-24 11:48:38 native ERR verify: layer 44 never rang (operation not supported on global/shared address space)
+```
+
+**What the words are.** `cudaGetErrorString` of **717, `cudaErrorInvalidAddressSpace`**
+(`/usr/local/cuda-12.9/include/driver_types.h:902-911`): *while executing a kernel, the device encountered an
+instruction which can only operate on memory locations in certain address spaces (global, shared, or local), but was
+supplied a memory address not belonging to an allowed address space* — and the header adds that the error is sticky:
+*"any further CUDA work will return the same error. To continue using CUDA, the process must be terminated and
+relaunched."* That is why the log simply ends: the engine could not carry on. The line itself is
+[engine/src/core/verify.cpp:4010-4028](../engine/src/core/verify.cpp#L4010-L4028), printed while the host waits for a
+stage's progress flag and `cudaStreamQuery` answers something other than `cudaErrorNotReady` — so a kernel of that
+stage had already faulted.
+
+**Where.** The first DFlash2 verify window after the capture, at layer 44 — the first layer of the CUDA1 stage
+(`layer split: layers 0-43 (CUDA0), 44-47 (CUDA1), one hand-off per window`). Both stages had captured their 4-token
+window cleanly (`captured the 4-token window (upload no error, sync no error)`), so the capture was fine and the launch
+of a real 8-token window is what faulted.
+
+**What had changed: the engine, and only the engine.** The config, its six `env` keys, the pack and the card order
+(`"gpu": [1, 0]`) are the same as the run that served this model from 2026-11-23 18:18 into 2026-11-24 on engine
+**0.1.61**, and that run answered requests with `STRATA_ROUTE_TAIL_SKIP=7` on — so neither the pin nor the split is
+new. The merge range rewrote exactly this path (verify.cpp +571 lines, dflash2.cu +975).
+
+**Ruled out by reading — static, unconfirmed.** The on-device hit plan was off:
+[engine/src/core/verify.cpp:1414-1427](../engine/src/core/verify.cpp#L1414-L1427) keeps `device_hits_` and
+`device_plan_` off unless `STRATA_VERIFY_DEVICE_PLAN` or `STRATA_VERIFY_DEVICE_HITS` is set ("off by default unless arch
+defaults opt in"), and this config sets neither — and the mixed-cc gate keeps the new arch tables away from this box.
+The log's `token graph hit path: … decided on the device` is the token graph's own hit path
+[engine/src/program/generate.cpp:11150-11165](../engine/src/program/generate.cpp#L11150-L11165), which a split does not
+take at all (`!multi_gpu`, "a split's token graph cannot span stages"). The cluster and distributed-shared-memory
+kernels are Hopper-only at compile time ([engine/src/kernels/cuda/qsa_select.cu:1413-1416](../engine/src/kernels/cuda/qsa_select.cu#L1413-L1416),
+[engine/src/kernels/cuda/sampler.cu:206-209](../engine/src/kernels/cuda/sampler.cu#L206-L209), both commented "a trap,
+never launched" for older targets), and this box is sm_70 and sm_89.
+
+**Also in that log, for the split's future here.** CUDA1 came up with **1627 expert-cache slots** on a **2.9 GB/s**
+link, which shrank the prompt chunk to 7424 tokens, and the engine said outright that "a card this small can serve as
+a helper expert cache instead of a split stage" (docs/SECOND_GPU.md). CUDA0 was left with 756 MiB free.
+
+**Not measured.** Both cards belong to another model right now, so none of this was reproduced or bisected: the fault
+was seen once, in the model's own log.
+
+**Ways to start this model again, cheapest first — one change per try, and a config of its own per arm.**
+
+1. Put back `engine-cuda12/strata.old-0.1.61.pre-0.1.66` — the build that served this model the day before. Rename the
+   live file aside, copy that one in, put `version` and `src` back in `BUILD.json`. This is also the control arm for
+   the report upstream.
+2. `"drafting": "off"` in the config: [terminal/strata_control/drafting.py:37](../terminal/strata_control/drafting.py#L37)
+   accepts `auto | mtp | dflash2 | off`. No verify window is ever built, so the faulting kernel cannot run. What it
+   costs in decode speed is unmeasured.
+3. One card: `"gpu": [1]`. `layer_split_of()`
+   [terminal/serve/server_parts/engines.py:783-786](../terminal/serve/server_parts/engines.py#L783-L786) adds
+   `--layer-split auto` only when a config names more than one card, so with one card the engine prints "one GPU
+   visible, so no split" ([engine/src/program/generate.cpp:4893](../engine/src/program/generate.cpp#L4893)) and there is
+   no second stage to fault in. Whether CUDA0 then holds the whole model at the current `--vram-reserve-*` is
+   unconfirmed — the same start left it 756 MiB free *with* four layers offloaded.
+4. `--peer-device` in `args`, which the same helper honours by not adding the split: the second card becomes an
+   expert-cache tier. Untested here, and the peer tier reads its rows over P2P, which this pair may not have.
+
 ## Two hazards on this checkout
 
 **Running upstream's setup or tests from this folder moves the local files away.** `terminal/setup.py:8382-8407`
