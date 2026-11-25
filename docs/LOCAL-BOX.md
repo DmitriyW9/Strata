@@ -359,6 +359,32 @@ commits to read while the build runs. The first to read is `53f59c064`: its own 
 visible in this very log (`--prefill auto stays at 8192 … (#5199)` and the 7424-token chunk that CUDA1's 1627 slots
 forced). A lead from its commit message and the log, nothing more — it is not a finding until a build says so.
 
+### 2026-11-25: the same config on 0.1.67 is not faulting
+
+At 01:03 this model started again from `engine-cuda12/strata`, which now reports **0.1.67** (`BUILD.json`: version
+0.1.67, `src b0c77e575f34d2fe`, `vision_src 259ad3fe697497fd`). That rebuild was not made in this session — it followed
+the deploy steps written above, and the engine folder now carries 0.1.67. Config, `env` (all six keys), pack and card
+order are unchanged, `DFlash2 drafter on`, and both stages built their verify windows: `verify: window up to 8 tokens,
+107.9 MiB of device buffers`, `756 MiB of VRAM free with everything loaded`, CUDA1 `expert cache 1591 slots`.
+
+Through 02:30 the log holds **two** `never rang` lines, both from 2026-11-24 11:48 — nothing since — and the run served
+97 prompts in about 80 minutes of real traffic, with its own lines reporting drafting working (`suffix drafts: 45
+windows, 116 of 176 drafts accepted`, `decode expert cache hit rate: 90.0 %`, `KV streaming: 92.53 % … hit VRAM`).
+
+What is **not** established: that 0.1.67 fixed anything. The #6747 guard did not fire here — there is no
+`STRATA_GDN_SPLIT=1 (the sm_70 default) is dropped` line, as expected, since a layer split has no lookup window — so
+whatever stopped the fault is not that. The one visible difference from the faulted run is the prompt chunk: the
+faulted run shrank it to **7424 tokens with a 384-slot ring**, this one runs **8192 tokens with a 132-slot ring**. And
+the earlier fault came 16 minutes into its run, so being 80 minutes in is past that mark but proves nothing about the
+state that produced it.
+
+Two practical consequences. The bisection above has nothing to bisect while the fault does not come back, and arm 5
+(dropping `STRATA_SM70_TABLE` and `STRATA_ARGMAX_ROWS_SM70`) is not needed; both stay written down for the day it
+returns. And the rollback this section used to offer is **gone**: `strata.old-0.1.61.pre-0.1.66` and
+`strata-vision.old-0.1.61.pre-0.1.66` are no longer in `engine-cuda12/`, and nothing kept the 0.1.66 build either — the
+folder went 0.1.61 → 0.1.66 → 0.1.67 with only the newest kept. Anyone who wants a way back should copy the current
+file aside before the next deploy.
+
 ## Two hazards on this checkout
 
 **Running upstream's setup or tests from this folder moves the local files away.** `terminal/setup.py:8382-8407`
