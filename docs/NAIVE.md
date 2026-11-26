@@ -54,10 +54,7 @@ So the port is its own binary, and `strata`'s default path stays byte-identical.
 | Reader + tensor inventory (types, shapes, shard bounds) | `engine/include/strata/naive/reader.hpp` | `--check` passes on MQ87 and its draft |
 | `strata-naive` binary (`--check`, serve INFO/READY, the decode loop) | `engine/src/naive/naive_main.cpp`, `engine/include/strata/naive/runtime.hpp` | builds CPU-only; serves requests (the smoke section below) |
 | CMake target, OFF by default | `engine/CMakeLists.txt` (`STRATA_BUILD_NAIVE`) | does not change any existing target |
-| Geometry (every metadata key, per-layer lists) | `engine/include/strata/naive/geometry.hpp` | reads the model; cross-key rules in `check_geometry` |
-| Reader + tensor inventory (types, shapes, shard bounds) | `engine/include/strata/naive/reader.hpp` | `--check` passes on MQ87 and its draft |
-| `strata-naive` binary (`--check`, serve INFO/READY, the decode loop) | `engine/src/naive/naive_main.cpp`, `engine/include/strata/naive/runtime.hpp` | builds CPU-only; serves requests (the smoke section below) |
-| CMake target, OFF by default | `engine/CMakeLists.txt` (`STRATA_BUILD_NAIVE`) | does not change any existing target |
+| Start-up memory plan + resident weights (RAM fp32/raw pool, CUDA IQ2 expert GEMV) | `engine/include/strata/naive/pool.hpp`, `engine/include/strata/naive/gpu.hpp`, `engine/src/naive/gpu.cu` | `ctest -R naive_pool_test` passes (the memory section below) |
 | `qwen2` pre-tokenizer (llama.cpp's QWEN2 rule, QWEN35 minus `\p{M}`) | `tools/strata_tokenizer.py` | unit tests pass; encodes/round-trips the model's own vocabulary |
 | Tokenizer folder from the GGUF (vocab, merges, types, chat template) | `terminal/tools/naive_extract_tokenizer.py` | wrote the pack folder; the server loads it |
 | Run config and script (port 8081, next to the running 8080 engine) | `strata-naive-naive.json`, `run-naive.sh` | the server starts, lists the model, answers requests (the smoke section below) |
@@ -301,6 +298,65 @@ the 19 new rows (11.6 s/row still cache-starved, decode 9.7 s/token) - the serve
 session reuse, measured end to end.  These are verify-only numbers with the draft off; nothing in
 them depends on GPU, CUDA or ggml-cuda.
 
+## Where every byte lives at start-up (the residency pool)
+
+The served request above pays the disk: the weights are read through the page cache as each row
+needs them, so a cold start waits (the measured 12.7 s/token). The residency pool
+(`engine/include/strata/naive/pool.hpp`) is the fix: the engine brings the weights into memory once,
+at start-up, and the forward reads RAM and VRAM after that, never the disk.
+
+**The two roles come from the model itself.** The three expert stacks per MoE layer
+(`ffn_gate_exps` / `ffn_up_exps` IQ2_XXS, `ffn_down_exps` IQ2_XS) are touched only through the
+router's eight picks per row, so they stay in their native bytes (dequantised they would be four
+times larger) and are the part worth putting on a card. Everything else - the attention
+Q6_K/Q8_0, the BF16 indexer, the F32 norms and router, the Q8_0 embedding and head - is read whole
+by every row, so it is kept dequantised to fp32 in RAM.
+
+**The plan is computed before anything loads**, from the file's own tensor table and the memory the
+box reports (free RAM from `/proc/meminfo`, free VRAM from `cudaMemGetInfo`), and prints as INFO so
+the numbers are checkable: `plan_expert_gib`, `plan_dense_fp32_gib`, `plan_ram_gib`, and a
+`plan_note` that says why a smaller box keeps less resident. Measured on the real 4-shard MQ87
+file (`strata-naive --check`, this machine): experts 75.64 GiB + dense fp32 22.59 GiB = 98.23 GiB of
+RAM, against 14 GiB free here - so this box prints the refusal and serves from the mmap windows,
+the old path, unchanged. On a box with ~104 GiB free the same plan says everything fits resident.
+The plan keeps 8 GiB of RAM free for the runtime's caches and 700 MiB on each card, never splits an
+expert stack across cards, and never shrinks the request silently.
+
+**Three tiers, one flag.** `--weights auto` (the default) loads everything when it fits, else the
+largest set that does - always the experts, the bytes a cold session pages - and reads the rest
+through the old windows; `--weights resident` refuses to start instead of falling back (exit 2,
+with the reason); `--weights cache` is the path before the pool existed. `run-naive.sh --weights
+... [--gpus 0,1] [--no-gpu]` passes them through. `terminal/tools/naive_memory_plan.py <shard1.gguf>`
+answers the same questions, printing the same `plan_*` numbers, without starting the engine.
+
+**A fourth tier spends the cards instead of the RAM.** `--weights vram-split` places each whole
+expert stack EITHER on a card (copied straight from the file's mmap pages to the card, so the
+engine keeps no RAM copy of it) OR in the RAM pool - never both. The copy tiers above keep a RAM
+copy of every card-resident stack (the pool loads it first and the card copies from it); this one
+does not, which is the point on a box whose RAM is the tight side. Cards fill first - richest
+first, file order, a stack never split across cards - then the RAM takes the fp32 dense set and
+the stacks no card took; a stack that fits nowhere reads the mmap windows and is named in
+`split_note`. The plan prints beside the other one (`split_vram_expert_gib`,
+`split_ram_expert_gib`, `split_skipped_gib`, per-card `split_cardN_expert_gib`), and the tier
+refuses to start (exit 2) when the fp32 dense set - which always lives in RAM - does not fit: on
+this box (about 11 GiB of free RAM, both cards nearly full) it refuses with that reason rather
+than half-loading. `terminal/tools/naive_memory_plan.py --weights vram-split` prints the same
+`split_*` numbers without starting the engine.
+
+**A card that holds a stack answers its rows.** The CUDA tier (`engine/src/naive/gpu.cu`, built
+with `-DSTRATA_NAIVE_CUDA=ON`; this build targets sm_75/89 because CUDA 13 no longer compiles
+sm_70) decodes IQ2 on the card with ggml's own tables and the same double-precision sum the CPU
+uses, so a card's answer left the pool's CPU answer by nothing measurable: `naive_pool_test` on a
+real RTX 4070 SUPER reports the card's expert GEMV bitwise-equal to the CPU row (worst relative
+difference 0.000000). A card-side failure is the request's error, never a silent re-read of the CPU
+copy - the same never-answer-wrong rule as the serve loop.
+
+**What is tested**: `ctest -R naive_pool_test` (CPU-only build: plan arithmetic against made-up
+cards, the pool's bytes against the file bitwise, every pool answer against the mmap path
+bitwise, and the whole synthetic model through the pool answering the same logits; CUDA build adds
+the card check above, and says SKIP without a card). The default `strata` engine, its targets and
+its numbers are untouched: the pool lives entirely on the `strata-naive` side.
+
 ## What is left after the first answer
 
 The loader, the router, the layers, the expert FFN, the DSA layer, the running caches, the sampler
@@ -314,8 +370,11 @@ capacity and speed work around the loop:
 3. **Speed**: this path is written to be simple and checkable first.  One measured consequence: the
    weights are read from the 81 GiB of shards through the page cache as each row needs them, so a
    cold start pays the disk before its first token and a warm session pays only the routed expert
-   slices it touches.  Resident slices, a better thread split and the draft are the speed work that
-   follows once the numbers are pinned.
+   slices it touches.  The residency pool (the section above) removes the disk from the loop on a
+   box with the room; a better thread split and the draft are the speed work that follows once the
+   numbers are pinned.  Measured on this box (14 GiB free): the plan refuses residency (98.23 GiB
+   would be needed), so the served request above is the no-pool path - on a box that fits, the same
+   plan brings the weights resident at start-up instead.
 
 The model's family reference (its recipe names it) is the upstream Rust runtime.  Everything the
 page claims as measured has been run on this machine: the arithmetic against the numpy oracle, the
@@ -344,5 +403,9 @@ session, and one served chat request answered end to end on the real file.
   wiring), `terminal/tools/naive_runtime_reference.py` (the independent numpy session, accumulation-order
   mirrored), `engine/tests/naive/test_naive_runtime.cpp` (`ctest -R naive_runtime_test`; it writes the ~1 GB
   synthetic GGUF into the build directory and refuses to compare anything that is not finite)
+- `engine/include/strata/naive/pool.hpp` (the memory plan + the resident pool), `engine/include/strata/naive/gpu.hpp`
+  + `engine/src/naive/gpu.cu` / `gpu_stub.cpp` (the CUDA IQ2 expert GEMV, `-DSTRATA_NAIVE_CUDA=ON`),
+  `terminal/tools/naive_memory_plan.py` (the plan, without the engine), `engine/tests/naive/synthetic_model.hpp`
+  (the synthetic model both suites share), `engine/tests/naive/test_naive_pool.cpp` (`ctest -R naive_pool_test`)
 - `strata-naive-naive.json`, `run-naive.sh`
 - `Strata-data/packs/naive-n05-flash/tokenizer/` (five files extracted from the model's GGUF)

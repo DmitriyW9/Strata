@@ -40,8 +40,10 @@
 // CPU-only by design, like the rest of the strata-naive path (docs/NAIVE.md).
 #pragma once
 
+#include "strata/naive/gpu.hpp"
 #include "strata/naive/kernels.hpp"
 #include "strata/naive/loader.hpp"
+#include "strata/naive/pool.hpp"
 #include "strata/naive/reader.hpp"
 
 #include <algorithm>
@@ -256,9 +258,14 @@ private:
 // ---------------------------------------------------------------- the runtime
 class NaiveRuntime {
 public:
+    /// `pool` / `gpu` are optional (nullptr: read through the mmap windows, the pre-pool path). When
+    /// a pool is given, every weight read below first asks it: a resident dense tensor reads its fp32
+    /// copy, a resident expert stack its raw copy (bit-identical to the mmap, pool.hpp), and a stack
+    /// the plan placed on a card (gpu->handle_of) runs its GEMV there. A name the pool does not hold
+    /// falls back to the mmap windows - the same bytes, the same arithmetic, just the disk behind them.
     NaiveRuntime(const GgufModel& model, const NaiveGeometry& g, int threads, int64_t history_rows,
-                 std::string& err)
-        : m_(model), g_(g), threads_(threads > 0 ? threads : 1) {
+                 std::string& err, const NaivePool* pool = nullptr, NaiveGpu* gpu = nullptr)
+        : m_(model), g_(g), threads_(threads > 0 ? threads : 1), pool_(pool), gpu_(gpu) {
         if (g_.add_full_sink) { err = "DSA-layer sinks (add_full_sink) are not implemented by this build"; return; }
         if (g_.n_dsa_layers() > 0 && !g_.dsa_enabled) { err = "dsa_enabled is false but the pattern has DSA layers"; return; }
         if (!g_.expert_weights_norm) { err = "expert_weights_norm false: this router always renormalises"; return; }
@@ -357,7 +364,7 @@ public:
         const int64_t pos = (int64_t) tok_.size();
         // The embedding row: one column of the {n_embd, vocab} table (loader.hpp's column window).
         LoadedTensor emb;
-        if (const std::string e = load_tensor_cols(m_, "token_embd.weight", (uint64_t) token, 1, emb); !e.empty())
+        if (const std::string e = load_cols("token_embd.weight", (uint64_t) token, 1, emb); !e.empty())
             return e;
         std::memcpy(x_.data(), emb.data.data(), (size_t) g_.n_embd * sizeof(float));
         if (dbg == 2) dbg_pts.emplace_back("emb", x_);   // the embedding row, before layer 0
@@ -368,7 +375,7 @@ public:
         if (want_logits) {
             LayerWeights& w = lw_[(size_t) (g_.n_layers - 1)];
             if (!w.head_ok) {
-                if (const std::string e = load_tensor_f32(m_, "output_norm.weight", w.head); !e.empty()) return e;
+                if (const std::string e = load_f32("output_norm.weight", w.head); !e.empty()) return e;
                 w.head_ok = true;
             }
             rmsnorm_training(x_.data(), w.head.data.data(), (int) g_.n_embd, (float) g_.rms_eps, xn_.data());
@@ -409,15 +416,15 @@ private:
         LayerWeights& w = lw_[(size_t) l];
         if (!w.attn_ok) {
             std::snprintf(nm, sizeof nm, "blk.%lld.attn_norm.weight", (long long) l);
-            if (auto e = load_tensor_f32(m_, nm, w.attn_norm); !e.empty()) return e;
+            if (auto e = load_f32(nm, w.attn_norm); !e.empty()) return e;
             if (dsa) {
                 std::snprintf(nm, sizeof nm, "blk.%lld.indexer.k_norm.weight", (long long) l);
-                if (auto e = load_tensor_f32(m_, nm, w.ikn_w); !e.empty()) return e;
+                if (auto e = load_f32(nm, w.ikn_w); !e.empty()) return e;
                 std::snprintf(nm, sizeof nm, "blk.%lld.indexer.k_norm.bias", (long long) l);
-                if (auto e = load_tensor_f32(m_, nm, w.ikn_b); !e.empty()) return e;
+                if (auto e = load_f32(nm, w.ikn_b); !e.empty()) return e;
             } else if (g_.add_swa_sink) {
                 std::snprintf(nm, sizeof nm, "blk.%lld.attn_sinks.weight", (long long) l);
-                if (auto e = load_tensor_f32(m_, nm, w.sink); !e.empty()) return e;
+                if (auto e = load_f32(nm, w.sink); !e.empty()) return e;
             }
             w.attn_ok = true;
         }
@@ -548,12 +555,12 @@ private:
         // ---- the FFN: the dense layer's SwiGLU, or the router + IQ2 experts.
         if (!w.ffn_ok) {
             std::snprintf(nm, sizeof nm, "blk.%lld.ffn_norm.weight", (long long) l);
-            if (auto e = load_tensor_f32(m_, nm, w.ffn_norm); !e.empty()) return e;
+            if (auto e = load_f32(nm, w.ffn_norm); !e.empty()) return e;
             if (g_.is_moe_layer(l)) {
                 std::snprintf(nm, sizeof nm, "blk.%lld.ffn_gate_inp.weight", (long long) l);
-                if (auto e = load_tensor_f32(m_, nm, w.gate); !e.empty()) return e;
+                if (auto e = load_f32(nm, w.gate); !e.empty()) return e;
                 std::snprintf(nm, sizeof nm, "blk.%lld.exp_probs_b.bias", (long long) l);
-                if (auto e = load_tensor_f32(m_, nm, w.bias); !e.empty()) return e;
+                if (auto e = load_f32(nm, w.bias); !e.empty()) return e;
             }
             w.ffn_ok = true;
         }
@@ -666,12 +673,19 @@ private:
 
     // ---- the GEMV trio: the same per-row decode and double dot as loader.hpp, rows split over
     // threads.  A row's sum is never split, so the numbers do not move with the thread count.
+    // With a pool (runtime's optional ctor argument) a resident weight is read from the pool's copy
+    // first - fp32 for a dense tensor, native bytes for a raw one - and the mmap windows only answer
+    // for what the pool does not hold; the arithmetic is the same loop either way (pool.hpp).
     std::string gemv_bf16(const char* name, const float* x, int64_t n_in, int64_t n_out, float* y) {
         std::string e = gemv_raw(name, x, n_in, n_out, y);
         if (e.empty()) for (int64_t i = 0; i < n_out; ++i) y[i] = bf16_round(y[i]);
         return e;
     }
     std::string gemv_raw(const char* name, const float* x, int64_t n_in, int64_t n_out, float* y) {
+        if (pool_) {
+            if (pool_->gemv_f32(name, x, n_in, n_out, y, threads_)) return {};
+            if (pool_->gemv_raw(name, x, n_in, n_out, y, threads_)) return {};
+        }
         size_t shard = 0;
         const TensorInfo* t = m_.find(name, &shard);
         if (!t) return std::string("the model has no ") + name;
@@ -711,6 +725,15 @@ private:
     }
     std::string expert_gemv_raw(const char* name, int expert, const float* x, int64_t n_in,
                                 int64_t n_out, float* y) {
+        // The GPU tier first for a stack the plan placed on a card: a card that holds the stack
+        // OWNS its rows for this engine, so a GPU-side failure is the request's error (the same
+        // "never answer wrong" rule as the serve loop), never a silent re-read of the CPU copy.
+        if (gpu_ && gpu_->ok()) {
+            const int h = gpu_->handle_of(name);
+            if (h >= 0) return gpu_->gemv_expert(h, (uint64_t) expert, x, n_in, y, n_out);
+        }
+        if (pool_ && pool_->gemv_expert_raw(name, (uint64_t) expert, x, n_in, n_out, y, threads_))
+            return {};
         size_t shard = 0;
         const TensorInfo* t = m_.find(name, &shard);
         if (!t) return std::string("the model has no ") + name;
@@ -753,6 +776,31 @@ private:
         return gemv_bf16("output.weight", x, g_.n_embd, g_.n_vocab, logits_.data());
     }
 
+    // ---- the two loader reads, pool-first.  load_f32 answers from the pool's fp32 copy (the maps
+    // are stable after load, pool.hpp); load_cols from the pool's copy of the table; both fall back
+    // to loader.hpp's mmap windows for a name the pool does not hold.
+    std::string load_f32(const char* name, LoadedTensor& out) {
+        if (pool_)
+            if (const LoadedTensor* p = pool_->fp32(name)) {
+                out = *p;
+                return {};
+            }
+        return load_tensor_f32(m_, name, out);
+    }
+    std::string load_cols(const char* name, uint64_t col_start, uint64_t cols, LoadedTensor& out) {
+        if (pool_ && pool_->resident(name)) {
+            size_t shard = 0;
+            const TensorInfo* t = m_.find(name, &shard);
+            if (!t) return std::string("the model has no ") + name;
+            out.shape = {t->shape[0], cols};
+            out.type = t->type;
+            out.data.resize((size_t) (t->shape[0] * cols));
+            if (pool_->cols(name, col_start, cols, out.data.data())) return {};
+            return std::string(name) + ": the resident copy could not answer this column window";
+        }
+        return load_tensor_cols(m_, name, col_start, cols, out);
+    }
+
     // ---- cache row helpers
     uint16_t* grow_u16(std::vector<uint16_t>& v, size_t row) {
         v.resize(v.size() + row);
@@ -771,6 +819,8 @@ private:
     const GgufModel& m_;
     NaiveGeometry g_;
     int threads_;
+    const NaivePool* pool_ = nullptr;  // optional: the resident weights (pool.hpp)
+    NaiveGpu* gpu_ = nullptr;          // optional: the card tier over the pool's expert stacks
     bool ok_ = false;
     std::vector<int32_t> tok_;                              // the session, position = index
     std::vector<uint64_t> ring_cap_;

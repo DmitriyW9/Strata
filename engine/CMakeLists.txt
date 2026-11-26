@@ -285,13 +285,53 @@ target_compile_definitions(strata-dequant PRIVATE STRATA_DEQUANT_SELFTEST)
 # GGUF (include/strata/naive/), the trunk's arithmetic and the runtime caches (runtime.hpp) - so it
 # needs no GPU and no backend, and changes no existing target.  OFF by default.
 option(STRATA_BUILD_NAIVE "Build the Naive-N0.5-Flash engine path (strata-naive)" OFF)
+# The GPU tier of the Naive path (src/naive/gpu.cu): the IQ2 expert GEMVs that run on a CUDA card.
+# Separate from STRATA_ENABLE_CUDA on purpose - strata-naive is its own executable and its CUDA tier
+# links nothing from the Flash-Next engine - so a naive CUDA build is
+# -DSTRATA_BUILD_NAIVE=ON -DSTRATA_NAIVE_CUDA=ON with STRATA_ENABLE_CUDA left OFF.  OFF (the default,
+# every CI box) compiles src/naive/gpu_stub.cpp instead: the same NaiveGpu methods, every call
+# refusing with "this build has no CUDA kernels", so the CPU path stays byte-identical.
+option(STRATA_NAIVE_CUDA "Build the Naive path's CUDA expert tier (needs a CUDA toolkit)" OFF)
 if(STRATA_BUILD_NAIVE)
   # The CPU forward's row pool.  Sought only inside this opt-in block and linked only into these
   # targets, so no existing target's flags move; without OpenMP the runtime compiles and runs its
   # rows one at a time (the pragmas are guarded), just slower.
   find_package(OpenMP COMPONENTS CXX QUIET)
+  # The GPU tier's definitions live in exactly one static library either way - gpu.cu's kernels
+  # when the tier is on, gpu_stub.cpp's refusals when it is not (gpu.hpp) - so strata-naive and
+  # every test that includes runtime.hpp (which pulls gpu.hpp in) links the same symbol set a CPU
+  # build always had: none of the CUDA runtime.
+  if(STRATA_NAIVE_CUDA)
+    # Same host-compiler guard as the Flash-Next CUDA backend: a newer GCC than the toolkit knows
+    # still compiles, it only makes nvcc complain.
+    string(APPEND CMAKE_CUDA_FLAGS " --allow-unsupported-compiler")
+    if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES AND NOT DEFINED ENV{CUDAARCHS})
+      # 75 is the floor with CUDA 13's nvcc, which dropped sm_70 and older (measured: "nvcc fatal:
+      # Unsupported gpu architecture 'compute_70'"); a CUDA 12.x toolkit still compiles sm_70 (a
+      # V100 box builds this tier with -DCMAKE_CUDA_ARCHITECTURES=70 and that toolkit).  The
+      # kernels' warp folds use double shuffles, which need Volta (cc 7.0) or newer either way.
+      set(CMAKE_CUDA_ARCHITECTURES 75;89 CACHE STRING "CUDA architectures for the naive GPU tier")
+      message(STATUS "STRATA_NAIVE_CUDA: CMAKE_CUDA_ARCHITECTURES not set, defaulting to 75;89 "
+                     "(CUDA 13's floor; pass -DCMAKE_CUDA_ARCHITECTURES for another card)")
+    endif()
+    enable_language(CUDA)
+    find_package(CUDAToolkit REQUIRED)
+    add_library(strata_naive_gpu STATIC src/naive/gpu.cu)
+    target_include_directories(strata_naive_gpu PRIVATE include third_party/ggml)
+    # ggml-base for ggml.h (pool.hpp pulls it in); CUDA::cudart for the runtime calls.
+    target_link_libraries(strata_naive_gpu PRIVATE ggml-base CUDA::cudart)
+    set_source_files_properties(src/naive/gpu.cu PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+  else()
+    add_library(strata_naive_gpu STATIC src/naive/gpu_stub.cpp)
+    target_include_directories(strata_naive_gpu PRIVATE include)
+    target_link_libraries(strata_naive_gpu PRIVATE ggml-base)  # gpu.hpp -> pool.hpp -> ggml.h
+  endif()
   add_executable(strata-naive src/naive/naive_main.cpp)
-  target_link_libraries(strata-naive PRIVATE strata_artifact ggml-base)
+  target_include_directories(strata-naive PRIVATE include third_party/ggml)
+  target_link_libraries(strata-naive PRIVATE strata_artifact ggml-base strata_naive_gpu)
+  if(STRATA_NAIVE_CUDA)
+    target_link_libraries(strata-naive PRIVATE CUDA::cudart)
+  endif()
   if(OpenMP_CXX_FOUND)
     target_link_libraries(strata-naive PRIVATE OpenMP::OpenMP_CXX)
   endif()
@@ -339,7 +379,7 @@ if(STRATA_BUILD_NAIVE)
     # -> skip 77; the reference shares no code with the runtime beyond the byte-window rules).
     add_executable(naive_runtime_test tests/naive/test_naive_runtime.cpp)
     target_include_directories(naive_runtime_test PRIVATE include)
-    target_link_libraries(naive_runtime_test PRIVATE strata_artifact ggml-base)
+    target_link_libraries(naive_runtime_test PRIVATE strata_artifact ggml-base strata_naive_gpu)
     if(OpenMP_CXX_FOUND)
       target_link_libraries(naive_runtime_test PRIVATE OpenMP::OpenMP_CXX)
     endif()
@@ -347,6 +387,19 @@ if(STRATA_BUILD_NAIVE)
              COMMAND naive_runtime_test ${CMAKE_CURRENT_SOURCE_DIR}/tests/naive/fixtures
                      ${CMAKE_CURRENT_BINARY_DIR}/naive_runtime_scratch)
     set_tests_properties(naive_runtime_test PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 2400)
+    # the residency pool and the memory plan (include/strata/naive/pool.hpp): the plan's arithmetic
+    # on made-up cards, the resident copies bitwise-equal to the mmap's, the runtime through the
+    # pool bitwise-equal to the runtime through the mmap, and - when a card answers - the IQ2 GEMV
+    # on it within one bf16 ulp of the CPU row (no CUDA build / no card -> the GPU part says SKIP).
+    add_executable(naive_pool_test tests/naive/test_naive_pool.cpp)
+    target_include_directories(naive_pool_test PRIVATE include tests/naive)
+    target_link_libraries(naive_pool_test PRIVATE strata_artifact ggml-base strata_naive_gpu)
+    if(OpenMP_CXX_FOUND)
+      target_link_libraries(naive_pool_test PRIVATE OpenMP::OpenMP_CXX)
+    endif()
+    add_test(NAME naive_pool_test
+             COMMAND naive_pool_test ${CMAKE_CURRENT_BINARY_DIR}/naive_pool_scratch)
+    set_tests_properties(naive_pool_test PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 1200)
   endif()
 endif()
 
