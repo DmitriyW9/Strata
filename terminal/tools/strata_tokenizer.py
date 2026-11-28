@@ -109,7 +109,9 @@ O200K_PATTERN = (
     r"|\s+(?!\S)"
     r"|\s+"
 )
-O200K_PRES = ("o200k", "o200k_base", "gpt-4o", "inkling", "inkling2")
+# "gigachat4" is the same o200k rule: llama.cpp maps tokenizer_pre "gigachat4" to the o200k regex
+# (its LLAMA_VOCAB_PRE_TYPE_GIGACHAT4), so the name joins the list with the pattern above unchanged.
+O200K_PRES = ("o200k", "o200k_base", "gpt-4o", "inkling", "inkling2", "gigachat4")
 
 
 # The `qwen2` pre-tokenizer (Qwen2 / Qwen3-Next; llama.cpp LLAMA_VOCAB_PRE_TYPE_QWEN2,

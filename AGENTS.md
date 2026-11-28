@@ -70,7 +70,8 @@ Source setup does not make an unsupported model or backend compatible. Strata's 
 - The Terminal: [docs/TERMINAL.md](docs/TERMINAL.md) and [docs/TERMINAL_LAUNCH.md](docs/TERMINAL_LAUNCH.md). The app,
   the packages and the update feed: [packaging/README.md](tools/packaging/README.md) and [packaging/UPDATES.md](tools/packaging/UPDATES.md).
 - AMD (HIP) build and validation: [docs/AMD_HIP.md](docs/AMD_HIP.md); multi-GPU: [docs/MULTI_GPU.md](docs/MULTI_GPU.md);
-  Mac (Metal): [docs/MAC.md](docs/MAC.md).
+  Mac (Metal): [docs/MAC.md](docs/MAC.md). Models outside the native families (GigaChat4) run on the llama.cpp
+  engine path: [docs/GIGACHAT4.md](docs/GIGACHAT4.md).
 - Tests: the Terminal and Control tests are in `terminal/tests/terminal` (`python -m pytest terminal/tests/terminal`). The app's UI
   tests run with `npm test` in `app/host`. Setup's own tests run without a GPU or downloads:
   `python tools/test_setup_<name>.py` (for example `terminal/tools/test_setup_amd.py`, `terminal/tools/test_setup_choices.py`).
